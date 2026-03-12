@@ -222,8 +222,22 @@
       transition: opacity .15s;
     }
     .timeline-handle:hover .handle-tooltip, .timeline-handle.dragging .handle-tooltip { opacity: 1; }
-    .timeline-legend { display: flex; gap: 16px; margin-top: 8px; font-size: 11px; color: var(--text-muted); }
+    .timeline-legend { display: flex; gap: 16px; margin-top: 8px; font-size: 11px; color: var(--text-muted); flex-wrap: wrap; }
     .legend-dot { display: inline-block; width: 10px; height: 10px; border-radius: 50%; margin-right: 4px; vertical-align: middle; }
+
+    /* Toggle switch */
+    .toggle-switch { position: relative; display: inline-block; width: 38px; height: 20px; flex-shrink: 0; }
+    .toggle-switch input { opacity: 0; width: 0; height: 0; }
+    .toggle-slider {
+      position: absolute; cursor: pointer; top: 0; left: 0; right: 0; bottom: 0;
+      background: #ccc; border-radius: 20px; transition: .3s;
+    }
+    .toggle-slider:before {
+      position: absolute; content: ""; height: 14px; width: 14px; left: 3px; bottom: 3px;
+      background: white; border-radius: 50%; transition: .3s;
+    }
+    .toggle-switch input:checked + .toggle-slider { background: #cf222e; }
+    .toggle-switch input:checked + .toggle-slider:before { transform: translateX(18px); }
 
     @media (max-width: 768px) {
       .form-grid { grid-template-columns: 1fr; }
@@ -337,13 +351,20 @@
               <div class="timeline-labels" id="timelineLabels"></div>
             </div>
             <div class="timeline-legend">
-              <span><span class="legend-dot" style="background:var(--primary);opacity:.5"></span>수집 구간</span>
-              <span><span class="legend-dot" style="background:#cf222e;opacity:.5"></span>벤치마크 구간</span>
+              <span><span class="legend-dot" style="background:var(--primary);opacity:.5"></span>수집 구간 (파란 핸들)</span>
+              <span><span class="legend-dot" style="background:#cf222e;opacity:.5"></span>벤치마크 구간 (빨간 핸들)</span>
               <span><span class="legend-dot" style="background:var(--success)"></span>현재 시각</span>
+            </div>
+            <div style="margin-top:10px;display:flex;align-items:center;gap:8px;">
+              <label class="toggle-switch">
+                <input type="checkbox" id="benchToggle">
+                <span class="toggle-slider"></span>
+              </label>
+              <span style="font-size:13px;font-weight:500;color:var(--text-muted)">벤치마크 구간 하이라이트 사용</span>
             </div>
           </div>
 
-          <!-- Hidden datetime-local inputs (synced by timeline) -->
+          <!-- Synced datetime-local inputs -->
           <div class="form-group">
             <label>Start Time (KST) <span class="required">*</span></label>
             <input type="datetime-local" name="start_time" id="inputStartTime" required>
@@ -354,15 +375,15 @@
             <input type="datetime-local" name="end_time" id="inputEndTime" required>
             <span class="hint">타임라인 드래그 또는 직접 입력</span>
           </div>
-          <div class="form-group">
-            <label>Benchmark Start (KST, optional)</label>
+          <div class="form-group" id="benchStartGroup" style="display:none">
+            <label>Benchmark Start (KST)</label>
             <input type="datetime-local" name="bench_start" id="inputBenchStart">
-            <span class="hint">벤치마크 시작 (차트 하이라이트)</span>
+            <span class="hint">빨간 핸들 드래그 또는 직접 입력</span>
           </div>
-          <div class="form-group">
-            <label>Benchmark End (KST, optional)</label>
+          <div class="form-group" id="benchEndGroup" style="display:none">
+            <label>Benchmark End (KST)</label>
             <input type="datetime-local" name="bench_end" id="inputBenchEnd">
-            <span class="hint">벤치마크 종료</span>
+            <span class="hint">빨간 핸들 드래그 또는 직접 입력</span>
           </div>
           <div class="form-group full">
             <label>Report Title</label>
@@ -709,6 +730,31 @@ loadConfigProfiles();
   // Handle positions as timestamps (KST epoch-like)
   let positions = { start_time: 0, end_time: 0, bench_start: 0, bench_end: 0 };
   let benchVisible = false;
+  const benchToggle = document.getElementById('benchToggle');
+  const benchStartGroup = document.getElementById('benchStartGroup');
+  const benchEndGroup = document.getElementById('benchEndGroup');
+
+  function setBenchVisible(on) {
+    benchVisible = on;
+    benchToggle.checked = on;
+    benchStartGroup.style.display = on ? '' : 'none';
+    benchEndGroup.style.display = on ? '' : 'none';
+    if (on && !positions.bench_start && !positions.bench_end && positions.start_time && positions.end_time) {
+      // Default: bench in the middle third of the range
+      const rangeLen = positions.end_time - positions.start_time;
+      positions.bench_start = snapMinute(positions.start_time + rangeLen * 0.33);
+      positions.bench_end = snapMinute(positions.start_time + rangeLen * 0.66);
+    }
+    if (!on) {
+      positions.bench_start = 0;
+      positions.bench_end = 0;
+      inputs.bench_start.value = '';
+      inputs.bench_end.value = '';
+    }
+    render();
+  }
+
+  benchToggle.addEventListener('change', function() { setBenchVisible(this.checked); });
 
   function kstNow() { return Date.now() + 9 * 3600000; }
 
@@ -870,12 +916,12 @@ loadConfigProfiles();
     positions.end_time = snapMinute(now);
     positions.start_time = snapMinute(now - hours * 3600000);
 
-    // Clear bench
-    benchVisible = false;
-    positions.bench_start = 0;
-    positions.bench_end = 0;
-    inputs.bench_start.value = '';
-    inputs.bench_end.value = '';
+    // Reset bench positions but keep toggle state
+    if (benchVisible) {
+      const rangeLen = hours * 3600000;
+      positions.bench_start = snapMinute(positions.start_time + rangeLen * 0.33);
+      positions.bench_end = snapMinute(positions.start_time + rangeLen * 0.66);
+    }
 
     // Highlight active button
     document.querySelectorAll('.preset-btn').forEach(b => b.classList.remove('active'));
@@ -889,10 +935,7 @@ loadConfigProfiles();
     inputs[key].addEventListener('change', function() {
       const val = this.value;
       if (!val) {
-        if (key.startsWith('bench')) {
-          positions[key] = 0;
-          if (!positions.bench_start && !positions.bench_end) benchVisible = false;
-        }
+        if (key.startsWith('bench')) positions[key] = 0;
         render();
         return;
       }
@@ -903,7 +946,7 @@ loadConfigProfiles();
       const ts = Date.UTC(+dp[0], +dp[1]-1, +dp[2], +tp[0], +tp[1] || 0);
       positions[key] = ts;
 
-      if (key.startsWith('bench') && ts > 0) benchVisible = true;
+      if (key.startsWith('bench') && ts > 0) setBenchVisible(true);
 
       // Auto-expand window if needed
       const allTs = [positions.start_time, positions.end_time,
@@ -930,6 +973,7 @@ loadConfigProfiles();
   window.timelineSync = function() {
     // Read current input values and sync timeline
     const allTs = [];
+    let hasBench = false;
     Object.keys(inputs).forEach(key => {
       const val = inputs[key].value;
       if (!val) { positions[key] = 0; return; }
@@ -939,9 +983,9 @@ loadConfigProfiles();
       const ts = Date.UTC(+dp[0], +dp[1]-1, +dp[2], +tp[0], +tp[1] || 0);
       positions[key] = ts;
       if (ts > 0) allTs.push(ts);
-      if (key.startsWith('bench') && ts > 0) benchVisible = true;
+      if (key.startsWith('bench') && ts > 0) hasBench = true;
     });
-    if (!positions.bench_start && !positions.bench_end) benchVisible = false;
+    setBenchVisible(hasBench);
     // Adjust window
     if (allTs.length >= 2) {
       const minTs = Math.min(...allTs);
