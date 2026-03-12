@@ -16,6 +16,42 @@ from flask import Flask, render_template, request, jsonify, send_from_directory,
 
 app = Flask(__name__)
 
+# ============================================================
+# OCI Profile Management
+# ============================================================
+OCI_PROFILES_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), ".oci_profiles")
+
+
+def get_profiles_dir():
+    os.makedirs(OCI_PROFILES_DIR, exist_ok=True)
+    return OCI_PROFILES_DIR
+
+
+def list_profiles():
+    """List saved OCI profiles."""
+    pdir = get_profiles_dir()
+    profiles = []
+    for d in sorted(os.listdir(pdir)):
+        meta_path = os.path.join(pdir, d, "meta.json")
+        if os.path.isfile(meta_path):
+            with open(meta_path) as f:
+                meta = json.load(f)
+            meta["id"] = d
+            # Check if config & key files exist
+            meta["has_config"] = os.path.isfile(os.path.join(pdir, d, "config"))
+            meta["has_key"] = os.path.isfile(os.path.join(pdir, d, "oci_api_key.pem"))
+            profiles.append(meta)
+    return profiles
+
+
+def get_profile_oci_paths(profile_id):
+    """Return (config_path, key_path) for a saved profile, or None."""
+    pdir = os.path.join(get_profiles_dir(), profile_id)
+    config_path = os.path.join(pdir, "config")
+    if not os.path.isfile(config_path):
+        return None, None
+    return config_path, pdir
+
 
 def normalize_iso_time(val):
     """Ensure datetime string is full ISO 8601 with seconds and Z suffix."""
@@ -55,10 +91,23 @@ def run_job(job_id, config):
 
     try:
         # --- Step 1: Write temp config ---
+        # Resolve OCI config file path from saved profile or manual input
+        oci_config_file = config.get("oci_config_file", "~/.oci/config")
+        oci_profile = config.get("oci_profile", "DEFAULT")
+
+        profile_id = config.get("oci_profile_id", "")
+        if profile_id:
+            saved_config, _ = get_profile_oci_paths(profile_id)
+            if saved_config:
+                oci_config_file = saved_config
+                oci_profile = "DEFAULT"  # saved config uses DEFAULT section
+                jobs[job_id]["log"] += f"Using saved OCI profile: {profile_id}\n"
+                jobs[job_id]["log"] += f"Config: {saved_config}\n\n"
+
         config_path = os.path.join(out_dir, "config.env")
         with open(config_path, "w") as f:
-            f.write(f'OCI_CONFIG_FILE="{config.get("oci_config_file", "~/.oci/config")}"\n')
-            f.write(f'OCI_PROFILE="{config.get("oci_profile", "DEFAULT")}"\n')
+            f.write(f'OCI_CONFIG_FILE="{oci_config_file}"\n')
+            f.write(f'OCI_PROFILE="{oci_profile}"\n')
             f.write(f'COMPARTMENT_ID="{config["compartment_id"]}"\n')
             f.write(f'NAMESPACE="{config["namespace"]}"\n')
             f.write(f'INTERVAL="{config.get("interval", "1m")}"\n')
@@ -247,6 +296,188 @@ def view_report(job_id):
     if not job:
         return redirect(url_for("index"))
     return render_template("report.html", job_id=job_id)
+
+
+# ============================================================
+# OCI Profile Management API
+# ============================================================
+
+@app.route("/api/profiles", methods=["GET"])
+def api_profiles():
+    return jsonify(list_profiles())
+
+
+@app.route("/api/profiles", methods=["POST"])
+def api_create_profile():
+    data = request.json
+    name = data.get("name", "").strip()
+    if not name:
+        return jsonify({"error": "Profile name is required"}), 400
+
+    # Generate safe directory name
+    profile_id = name.lower().replace(" ", "_")[:30]
+    profile_id = "".join(c for c in profile_id if c.isalnum() or c == "_")
+    if not profile_id:
+        profile_id = str(uuid.uuid4())[:8]
+
+    pdir = os.path.join(get_profiles_dir(), profile_id)
+    if os.path.exists(pdir):
+        # Append random suffix if exists
+        profile_id = f"{profile_id}_{str(uuid.uuid4())[:4]}"
+        pdir = os.path.join(get_profiles_dir(), profile_id)
+
+    os.makedirs(pdir, exist_ok=True)
+
+    # Save OCI config file
+    config_content = data.get("config_content", "").strip()
+    key_content = data.get("key_content", "").strip()
+
+    if not config_content:
+        return jsonify({"error": "OCI config content is required"}), 400
+
+    # Rewrite key_file path in config to point to our stored key
+    key_path = os.path.join(pdir, "oci_api_key.pem")
+    config_lines = []
+    for line in config_content.splitlines():
+        if line.strip().startswith("key_file"):
+            config_lines.append(f"key_file={key_path}")
+        else:
+            config_lines.append(line)
+    config_content_fixed = "\n".join(config_lines) + "\n"
+
+    config_path = os.path.join(pdir, "config")
+    with open(config_path, "w") as f:
+        f.write(config_content_fixed)
+    os.chmod(config_path, 0o600)
+
+    # Save key file
+    if key_content:
+        with open(key_path, "w") as f:
+            f.write(key_content)
+        os.chmod(key_path, 0o600)
+
+    # Save metadata
+    meta = {
+        "name": name,
+        "description": data.get("description", ""),
+        "region": data.get("region", ""),
+        "tenancy": data.get("tenancy", ""),
+        "created_at": datetime.now(timezone.utc).isoformat(),
+    }
+    with open(os.path.join(pdir, "meta.json"), "w") as f:
+        json.dump(meta, f, indent=2)
+
+    return jsonify({"id": profile_id, "name": name})
+
+
+@app.route("/api/profiles/<profile_id>", methods=["GET"])
+def api_get_profile(profile_id):
+    pdir = os.path.join(get_profiles_dir(), profile_id)
+    meta_path = os.path.join(pdir, "meta.json")
+    if not os.path.isfile(meta_path):
+        return jsonify({"error": "Profile not found"}), 404
+
+    with open(meta_path) as f:
+        meta = json.load(f)
+    meta["id"] = profile_id
+    meta["has_config"] = os.path.isfile(os.path.join(pdir, "config"))
+    meta["has_key"] = os.path.isfile(os.path.join(pdir, "oci_api_key.pem"))
+
+    # Read config (mask sensitive parts)
+    config_path = os.path.join(pdir, "config")
+    config_preview = ""
+    if os.path.isfile(config_path):
+        with open(config_path) as f:
+            for line in f:
+                if "key_file" in line:
+                    config_preview += "key_file=<managed by app>\n"
+                elif "fingerprint" in line:
+                    parts = line.strip().split("=", 1)
+                    if len(parts) == 2 and len(parts[1]) > 10:
+                        config_preview += f"{parts[0]}={parts[1][:8]}...{parts[1][-4:]}\n"
+                    else:
+                        config_preview += line
+                else:
+                    config_preview += line
+    meta["config_preview"] = config_preview
+    return jsonify(meta)
+
+
+@app.route("/api/profiles/<profile_id>", methods=["PUT"])
+def api_update_profile(profile_id):
+    pdir = os.path.join(get_profiles_dir(), profile_id)
+    if not os.path.isdir(pdir):
+        return jsonify({"error": "Profile not found"}), 404
+
+    data = request.json
+
+    # Update config if provided
+    config_content = data.get("config_content", "").strip()
+    if config_content:
+        key_path = os.path.join(pdir, "oci_api_key.pem")
+        config_lines = []
+        for line in config_content.splitlines():
+            if line.strip().startswith("key_file"):
+                config_lines.append(f"key_file={key_path}")
+            else:
+                config_lines.append(line)
+        with open(os.path.join(pdir, "config"), "w") as f:
+            f.write("\n".join(config_lines) + "\n")
+
+    # Update key if provided
+    key_content = data.get("key_content", "").strip()
+    if key_content:
+        key_path = os.path.join(pdir, "oci_api_key.pem")
+        with open(key_path, "w") as f:
+            f.write(key_content)
+        os.chmod(key_path, 0o600)
+
+    # Update meta
+    meta_path = os.path.join(pdir, "meta.json")
+    with open(meta_path) as f:
+        meta = json.load(f)
+    for field in ["name", "description", "region", "tenancy"]:
+        if data.get(field):
+            meta[field] = data[field]
+    meta["updated_at"] = datetime.now(timezone.utc).isoformat()
+    with open(meta_path, "w") as f:
+        json.dump(meta, f, indent=2)
+
+    return jsonify({"ok": True})
+
+
+@app.route("/api/profiles/<profile_id>", methods=["DELETE"])
+def api_delete_profile(profile_id):
+    pdir = os.path.join(get_profiles_dir(), profile_id)
+    if not os.path.isdir(pdir):
+        return jsonify({"error": "Profile not found"}), 404
+    import shutil
+    shutil.rmtree(pdir)
+    return jsonify({"ok": True})
+
+
+@app.route("/api/profiles/<profile_id>/test", methods=["POST"])
+def api_test_profile(profile_id):
+    """Test OCI CLI connectivity with this profile."""
+    config_path, _ = get_profile_oci_paths(profile_id)
+    if not config_path:
+        return jsonify({"error": "Profile config not found"}), 404
+
+    try:
+        result = subprocess.run(
+            ["oci", "--config-file", config_path, "iam", "region", "list", "--output", "json"],
+            capture_output=True, text=True, timeout=30
+        )
+        if result.returncode == 0:
+            regions = json.loads(result.stdout)
+            count = len(regions.get("data", []))
+            return jsonify({"ok": True, "message": f"Connected! ({count} regions available)"})
+        else:
+            return jsonify({"ok": False, "message": result.stderr.strip()[:300]})
+    except subprocess.TimeoutExpired:
+        return jsonify({"ok": False, "message": "Timeout connecting to OCI"})
+    except Exception as e:
+        return jsonify({"ok": False, "message": str(e)})
 
 
 # ============================================================

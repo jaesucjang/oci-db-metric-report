@@ -4,6 +4,7 @@ metrics_*/
 
 # Config with secrets
 config.env
+.oci_profiles/
 
 # Python
 __pycache__/

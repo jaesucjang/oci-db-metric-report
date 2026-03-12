@@ -187,6 +187,7 @@
   <!-- Tabs -->
   <div class="tabs">
     <div class="tab active" data-tab="new">New Report</div>
+    <div class="tab" data-tab="oci-settings">OCI Settings</div>
     <div class="tab" data-tab="history">History</div>
   </div>
 
@@ -204,12 +205,22 @@
       <h3>Configuration</h3>
       <form id="configForm">
         <div class="form-grid">
-          <div class="form-group">
+          <div class="form-group full">
+            <label>OCI Profile <span class="required">*</span></label>
+            <div style="display:flex;gap:8px;align-items:center;">
+              <select name="oci_profile_id" id="profileSelect" style="flex:1;" onchange="onProfileChange()">
+                <option value="">-- Manual (use local ~/.oci/config) --</option>
+              </select>
+              <button type="button" class="btn btn-outline btn-sm" onclick="switchTab('oci-settings')">+ Register</button>
+            </div>
+            <span class="hint">Select a saved profile or register a new one in OCI Settings tab</span>
+          </div>
+          <div class="form-group" id="manualConfigGroup">
             <label>OCI Config File</label>
             <input type="text" name="oci_config_file" value="~/.oci/config">
           </div>
-          <div class="form-group">
-            <label>OCI Profile</label>
+          <div class="form-group" id="manualProfileGroup">
+            <label>CLI Profile Name</label>
             <input type="text" name="oci_profile" value="DEFAULT">
           </div>
           <div class="form-group full">
@@ -307,6 +318,61 @@
     </div>
   </div>
 
+  <!-- Tab: OCI Settings -->
+  <div class="tab-content" id="tab-oci-settings">
+
+    <!-- Register new profile -->
+    <div class="card">
+      <h3>Register OCI Profile</h3>
+      <p style="font-size:13px;color:var(--text-muted);margin-bottom:16px;">
+        OCI config 파일과 API Key(.pem)를 등록하면 웹에서 바로 메트릭을 수집할 수 있습니다.
+      </p>
+      <div class="form-grid">
+        <div class="form-group">
+          <label>Profile Name <span class="required">*</span></label>
+          <input type="text" id="pName" placeholder="예: yogiyo-prod">
+        </div>
+        <div class="form-group">
+          <label>Description</label>
+          <input type="text" id="pDesc" placeholder="예: Yogiyo PoC compartment">
+        </div>
+        <div class="form-group full">
+          <label>OCI Config 내용 <span class="required">*</span></label>
+          <textarea id="pConfig" rows="8" style="width:100%;font-family:monospace;font-size:12px;padding:10px;border:1px solid var(--border);border-radius:6px;background:var(--bg);resize:vertical;" placeholder="[DEFAULT]
+user=ocid1.user.oc1..aaaa...
+fingerprint=aa:bb:cc:dd:...
+tenancy=ocid1.tenancy.oc1..aaaa...
+region=ap-seoul-1
+key_file=~/.oci/oci_api_key.pem"></textarea>
+          <span class="hint">~/.oci/config 파일 내용을 붙여넣기. key_file 경로는 자동으로 교체됩니다.</span>
+        </div>
+        <div class="form-group full">
+          <label>API Private Key (.pem) <span class="required">*</span></label>
+          <div style="display:flex;gap:8px;align-items:start;">
+            <textarea id="pKey" rows="6" style="flex:1;font-family:monospace;font-size:11px;padding:10px;border:1px solid var(--border);border-radius:6px;background:var(--bg);resize:vertical;" placeholder="-----BEGIN RSA PRIVATE KEY-----
+MIIEpAIBAAKCAQEA...
+-----END RSA PRIVATE KEY-----"></textarea>
+            <div>
+              <label for="pKeyFile" class="btn btn-outline btn-sm" style="cursor:pointer;">Upload .pem</label>
+              <input type="file" id="pKeyFile" accept=".pem,.key" style="display:none;" onchange="loadKeyFile(this)">
+            </div>
+          </div>
+          <span class="hint">OCI API 서명용 Private Key. 파일을 업로드하거나 내용을 직접 붙여넣기.</span>
+        </div>
+      </div>
+      <div class="actions" style="margin-top:16px;">
+        <button class="btn btn-primary" onclick="saveProfile()">Save Profile</button>
+      </div>
+      <div id="profileSaveMsg" style="margin-top:8px;font-size:13px;"></div>
+    </div>
+
+    <!-- Saved profiles list -->
+    <div class="card">
+      <h3>Saved Profiles</h3>
+      <div id="profileList"><p style="color:var(--text-muted);font-size:14px;">No profiles saved yet.</p></div>
+    </div>
+  </div>
+
   <!-- Tab: History -->
   <div class="tab-content" id="tab-history">
     <div class="card">
@@ -323,15 +389,142 @@
 
 <script>
 // --- Tab switching ---
+function switchTab(tabName) {
+  document.querySelectorAll('.tab').forEach(x => x.classList.remove('active'));
+  document.querySelectorAll('.tab-content').forEach(x => x.classList.remove('active'));
+  document.querySelector(`.tab[data-tab="${tabName}"]`).classList.add('active');
+  document.getElementById('tab-' + tabName).classList.add('active');
+  if (tabName === 'history') loadJobs();
+  if (tabName === 'oci-settings') loadProfileList();
+}
 document.querySelectorAll('.tab').forEach(t => {
-  t.addEventListener('click', () => {
-    document.querySelectorAll('.tab').forEach(x => x.classList.remove('active'));
-    document.querySelectorAll('.tab-content').forEach(x => x.classList.remove('active'));
-    t.classList.add('active');
-    document.getElementById('tab-' + t.dataset.tab).classList.add('active');
-    if (t.dataset.tab === 'history') loadJobs();
-  });
+  t.addEventListener('click', () => switchTab(t.dataset.tab));
 });
+
+// --- Profile management ---
+function loadProfiles() {
+  fetch('/api/profiles').then(r => r.json()).then(profiles => {
+    const sel = document.getElementById('profileSelect');
+    // Keep first option (manual)
+    sel.innerHTML = '<option value="">-- Manual (use local ~/.oci/config) --</option>';
+    profiles.forEach(p => {
+      const opt = document.createElement('option');
+      opt.value = p.id;
+      opt.textContent = `${p.name}${p.description ? ' - ' + p.description : ''}`;
+      if (p.has_config && p.has_key) {
+        opt.textContent += ' ✓';
+      } else {
+        opt.textContent += ' (incomplete)';
+      }
+      sel.appendChild(opt);
+    });
+  });
+}
+
+function onProfileChange() {
+  const sel = document.getElementById('profileSelect');
+  const manual = !sel.value;
+  document.getElementById('manualConfigGroup').style.display = manual ? '' : 'none';
+  document.getElementById('manualProfileGroup').style.display = manual ? '' : 'none';
+}
+
+function loadKeyFile(input) {
+  const file = input.files[0];
+  if (!file) return;
+  const reader = new FileReader();
+  reader.onload = e => { document.getElementById('pKey').value = e.target.result; };
+  reader.readAsText(file);
+}
+
+function saveProfile() {
+  const name = document.getElementById('pName').value.trim();
+  const desc = document.getElementById('pDesc').value.trim();
+  const config = document.getElementById('pConfig').value.trim();
+  const key = document.getElementById('pKey').value.trim();
+  const msg = document.getElementById('profileSaveMsg');
+
+  if (!name) { msg.innerHTML = '<span style="color:var(--danger)">Profile name is required</span>'; return; }
+  if (!config) { msg.innerHTML = '<span style="color:var(--danger)">OCI config content is required</span>'; return; }
+  if (!key) { msg.innerHTML = '<span style="color:var(--danger)">API key is required</span>'; return; }
+
+  msg.innerHTML = '<span style="color:var(--warning)">Saving...</span>';
+
+  fetch('/api/profiles', {
+    method: 'POST',
+    headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify({
+      name: name, description: desc,
+      config_content: config, key_content: key,
+    }),
+  }).then(r => r.json()).then(res => {
+    if (res.error) {
+      msg.innerHTML = `<span style="color:var(--danger)">${res.error}</span>`;
+    } else {
+      msg.innerHTML = `<span style="color:var(--success)">Saved! Profile: ${res.name} (${res.id})</span>`;
+      document.getElementById('pName').value = '';
+      document.getElementById('pDesc').value = '';
+      document.getElementById('pConfig').value = '';
+      document.getElementById('pKey').value = '';
+      loadProfiles();
+      loadProfileList();
+    }
+  });
+}
+
+function loadProfileList() {
+  fetch('/api/profiles').then(r => r.json()).then(profiles => {
+    const el = document.getElementById('profileList');
+    if (!profiles.length) {
+      el.innerHTML = '<p style="color:var(--text-muted);font-size:14px;">No profiles saved yet.</p>';
+      return;
+    }
+    el.innerHTML = profiles.map(p => `
+      <div class="job-item" style="cursor:default;">
+        <div style="flex:1">
+          <div style="font-weight:600;font-size:14px;">
+            ${p.name}
+            <span class="badge ${p.has_config && p.has_key ? 'badge-done' : 'badge-error'}"
+              style="margin-left:8px">${p.has_config && p.has_key ? 'Ready' : 'Incomplete'}</span>
+          </div>
+          <div style="font-size:12px;color:var(--text-muted);">${p.description || ''} | ${p.created_at || ''}</div>
+        </div>
+        <button class="btn btn-outline btn-sm" onclick="testProfile('${p.id}',this)">Test</button>
+        <button class="btn btn-outline btn-sm" style="color:var(--danger);border-color:var(--danger);"
+                onclick="deleteProfile('${p.id}')">Delete</button>
+      </div>
+    `).join('');
+  });
+}
+
+function testProfile(id, btn) {
+  btn.textContent = 'Testing...';
+  btn.disabled = true;
+  fetch('/api/profiles/' + id + '/test', {method:'POST'}).then(r => r.json()).then(res => {
+    btn.disabled = false;
+    if (res.ok) {
+      btn.textContent = '✓ Connected';
+      btn.style.color = 'var(--success)';
+      btn.style.borderColor = 'var(--success)';
+    } else {
+      btn.textContent = '✗ Failed';
+      btn.style.color = 'var(--danger)';
+      btn.style.borderColor = 'var(--danger)';
+      alert('Connection failed:\n' + res.message);
+    }
+    setTimeout(() => { btn.textContent = 'Test'; btn.style.color = ''; btn.style.borderColor = ''; }, 5000);
+  });
+}
+
+function deleteProfile(id) {
+  if (!confirm('Delete this OCI profile?')) return;
+  fetch('/api/profiles/' + id, {method:'DELETE'}).then(r => r.json()).then(() => {
+    loadProfiles();
+    loadProfileList();
+  });
+}
+
+// Init: load profiles
+loadProfiles();
 
 // --- Load samples ---
 fetch('/api/samples').then(r => r.json()).then(samples => {
