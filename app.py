@@ -15,6 +15,26 @@ from pathlib import Path
 from flask import Flask, render_template, request, jsonify, send_from_directory, redirect, url_for
 
 app = Flask(__name__)
+
+
+def normalize_iso_time(val):
+    """Ensure datetime string is full ISO 8601 with seconds and Z suffix."""
+    if not val:
+        return ""
+    val = val.strip()
+    # Remove trailing Z for parsing
+    raw = val.rstrip("Z")
+    # Try parsing various formats
+    for fmt in ("%Y-%m-%dT%H:%M:%S", "%Y-%m-%dT%H:%M"):
+        try:
+            dt = datetime.strptime(raw, fmt)
+            return dt.strftime("%Y-%m-%dT%H:%M:%SZ")
+        except ValueError:
+            continue
+    # If already has Z and seconds, return as-is
+    if val.endswith("Z") and len(val) >= 20:
+        return val
+    return val + ":00Z" if not val.endswith("Z") else val
 app.config["OUTPUT_BASE"] = os.path.join(os.path.dirname(__file__), "output")
 app.config["MAX_CONTENT_LENGTH"] = 16 * 1024 * 1024
 
@@ -125,6 +145,11 @@ def api_run():
     for field in required:
         if not data.get(field):
             return jsonify({"error": f"Missing required field: {field}"}), 400
+
+    # Normalize all time fields to full ISO 8601
+    for tf in ["start_time", "end_time", "bench_start", "bench_end"]:
+        if data.get(tf):
+            data[tf] = normalize_iso_time(data[tf])
 
     job_id = str(uuid.uuid4())[:8]
     jobs[job_id] = {
@@ -297,4 +322,4 @@ def api_sample(sample_id):
 
 if __name__ == "__main__":
     os.makedirs(app.config["OUTPUT_BASE"], exist_ok=True)
-    app.run(host="0.0.0.0", port=5050, debug=True)
+    app.run(host="0.0.0.0", port=5050, debug=False)
