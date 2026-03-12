@@ -1,0 +1,300 @@
+#!/usr/bin/env python3
+"""
+OCI DB Metric Report - Web Service
+Flask app for collecting OCI DB metrics and generating visual reports.
+"""
+
+import json
+import os
+import subprocess
+import threading
+import uuid
+from datetime import datetime, timezone
+from pathlib import Path
+
+from flask import Flask, render_template, request, jsonify, send_from_directory, redirect, url_for
+
+app = Flask(__name__)
+app.config["OUTPUT_BASE"] = os.path.join(os.path.dirname(__file__), "output")
+app.config["MAX_CONTENT_LENGTH"] = 16 * 1024 * 1024
+
+SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
+
+# In-memory job tracker
+jobs = {}
+
+
+def run_job(job_id, config):
+    """Background job: fetch metrics → generate charts → generate report."""
+    jobs[job_id]["status"] = "collecting"
+    jobs[job_id]["progress"] = 10
+
+    out_dir = os.path.join(app.config["OUTPUT_BASE"], f"job_{job_id}")
+    metrics_dir = os.path.join(out_dir, f"metrics_{config['namespace']}")
+    os.makedirs(metrics_dir, exist_ok=True)
+
+    try:
+        # --- Step 1: Write temp config ---
+        config_path = os.path.join(out_dir, "config.env")
+        with open(config_path, "w") as f:
+            f.write(f'OCI_CONFIG_FILE="{config.get("oci_config_file", "~/.oci/config")}"\n')
+            f.write(f'OCI_PROFILE="{config.get("oci_profile", "DEFAULT")}"\n')
+            f.write(f'COMPARTMENT_ID="{config["compartment_id"]}"\n')
+            f.write(f'NAMESPACE="{config["namespace"]}"\n')
+            f.write(f'INTERVAL="{config.get("interval", "1m")}"\n')
+            f.write(f'START_TIME="{config["start_time"]}"\n')
+            f.write(f'END_TIME="{config["end_time"]}"\n')
+            f.write(f'BENCH_START="{config.get("bench_start", "")}"\n')
+            f.write(f'BENCH_END="{config.get("bench_end", "")}"\n')
+            f.write(f'REPORT_TITLE="{config.get("report_title", "OCI DB Metric Report")}"\n')
+            f.write(f'OUTPUT_DIR="{metrics_dir}"\n')
+
+        jobs[job_id]["progress"] = 15
+
+        # --- Step 2: Fetch metrics ---
+        jobs[job_id]["log"] += "=== Step 1: Collecting metrics ===\n"
+        result = subprocess.run(
+            ["bash", os.path.join(SCRIPT_DIR, "fetch_metrics.sh"), config_path],
+            capture_output=True, text=True, timeout=300
+        )
+        jobs[job_id]["log"] += result.stdout + result.stderr
+        if result.returncode != 0:
+            jobs[job_id]["status"] = "error"
+            jobs[job_id]["error"] = "Metric collection failed. Check OCI CLI config."
+            return
+
+        jobs[job_id]["status"] = "charting"
+        jobs[job_id]["progress"] = 50
+
+        # --- Step 3: Generate charts ---
+        jobs[job_id]["log"] += "\n=== Step 2: Generating charts ===\n"
+        result = subprocess.run(
+            ["python3", os.path.join(SCRIPT_DIR, "generate_charts.py"), metrics_dir],
+            capture_output=True, text=True, timeout=120
+        )
+        jobs[job_id]["log"] += result.stdout + result.stderr
+        if result.returncode != 0:
+            jobs[job_id]["status"] = "error"
+            jobs[job_id]["error"] = "Chart generation failed."
+            return
+
+        jobs[job_id]["progress"] = 80
+
+        # --- Step 4: Generate markdown report ---
+        jobs[job_id]["status"] = "reporting"
+        jobs[job_id]["log"] += "\n=== Step 3: Generating report ===\n"
+        result = subprocess.run(
+            ["bash", os.path.join(SCRIPT_DIR, "generate_report.sh"), metrics_dir],
+            capture_output=True, text=True, timeout=60
+        )
+        jobs[job_id]["log"] += result.stdout + result.stderr
+
+        jobs[job_id]["progress"] = 100
+        jobs[job_id]["status"] = "done"
+        jobs[job_id]["metrics_dir"] = metrics_dir
+
+        # Parse stats
+        stats_path = os.path.join(metrics_dir, "stats_summary.csv")
+        if os.path.exists(stats_path):
+            import csv
+            with open(stats_path) as sf:
+                reader = csv.DictReader(sf)
+                jobs[job_id]["stats"] = list(reader)
+
+    except subprocess.TimeoutExpired:
+        jobs[job_id]["status"] = "error"
+        jobs[job_id]["error"] = "Timeout: operation took too long."
+    except Exception as e:
+        jobs[job_id]["status"] = "error"
+        jobs[job_id]["error"] = str(e)
+
+
+# ============================================================
+# Routes
+# ============================================================
+
+@app.route("/")
+def index():
+    return render_template("index.html")
+
+
+@app.route("/api/run", methods=["POST"])
+def api_run():
+    data = request.json
+    required = ["compartment_id", "namespace", "start_time", "end_time"]
+    for field in required:
+        if not data.get(field):
+            return jsonify({"error": f"Missing required field: {field}"}), 400
+
+    job_id = str(uuid.uuid4())[:8]
+    jobs[job_id] = {
+        "id": job_id,
+        "status": "queued",
+        "progress": 0,
+        "config": data,
+        "log": "",
+        "error": None,
+        "stats": None,
+        "metrics_dir": None,
+        "created_at": datetime.now(timezone.utc).isoformat(),
+    }
+
+    t = threading.Thread(target=run_job, args=(job_id, data), daemon=True)
+    t.start()
+
+    return jsonify({"job_id": job_id})
+
+
+@app.route("/api/status/<job_id>")
+def api_status(job_id):
+    job = jobs.get(job_id)
+    if not job:
+        return jsonify({"error": "Job not found"}), 404
+    return jsonify({
+        "id": job["id"],
+        "status": job["status"],
+        "progress": job["progress"],
+        "error": job["error"],
+        "stats": job["stats"],
+        "has_charts": job["metrics_dir"] is not None and os.path.exists(
+            os.path.join(job["metrics_dir"], "chart_overview.png")
+        ) if job["metrics_dir"] else False,
+    })
+
+
+@app.route("/api/log/<job_id>")
+def api_log(job_id):
+    job = jobs.get(job_id)
+    if not job:
+        return jsonify({"error": "Job not found"}), 404
+    return jsonify({"log": job["log"]})
+
+
+@app.route("/api/chart/<job_id>/<filename>")
+def api_chart(job_id, filename):
+    job = jobs.get(job_id)
+    if not job or not job["metrics_dir"]:
+        return jsonify({"error": "Not found"}), 404
+    allowed = ["chart_overview.png", "chart_detail.png", "chart_zoom.png"]
+    if filename not in allowed:
+        return jsonify({"error": "Invalid file"}), 400
+    return send_from_directory(job["metrics_dir"], filename)
+
+
+@app.route("/api/report/<job_id>")
+def api_report(job_id):
+    job = jobs.get(job_id)
+    if not job or not job["metrics_dir"]:
+        return jsonify({"error": "Not found"}), 404
+    report_path = os.path.join(job["metrics_dir"], "REPORT.md")
+    if not os.path.exists(report_path):
+        return jsonify({"error": "Report not generated"}), 404
+    with open(report_path) as f:
+        return jsonify({"markdown": f.read()})
+
+
+@app.route("/api/download/<job_id>/<filename>")
+def api_download(job_id, filename):
+    job = jobs.get(job_id)
+    if not job or not job["metrics_dir"]:
+        return jsonify({"error": "Not found"}), 404
+    return send_from_directory(job["metrics_dir"], filename, as_attachment=True)
+
+
+@app.route("/api/jobs")
+def api_jobs():
+    return jsonify([
+        {
+            "id": j["id"],
+            "status": j["status"],
+            "progress": j["progress"],
+            "namespace": j["config"].get("namespace", ""),
+            "created_at": j["created_at"],
+            "title": j["config"].get("report_title", ""),
+        }
+        for j in sorted(jobs.values(), key=lambda x: x["created_at"], reverse=True)
+    ])
+
+
+@app.route("/report/<job_id>")
+def view_report(job_id):
+    job = jobs.get(job_id)
+    if not job:
+        return redirect(url_for("index"))
+    return render_template("report.html", job_id=job_id)
+
+
+# ============================================================
+# Sample configs API
+# ============================================================
+SAMPLE_CONFIGS = {
+    "mysql_benchmark": {
+        "name": "MySQL Benchmark Sample",
+        "description": "OCI MySQL HeatWave - mysqlslap benchmark metrics (1 OCPU/16GB)",
+        "config": {
+            "oci_config_file": "~/.oci/config",
+            "oci_profile": "DEFAULT",
+            "compartment_id": "ocid1.compartment.oc1..aaaaaaaacnzhu2qnecid46t3nhmptegxzrvbv753r4fwffpa23bd5kbqzaua",
+            "namespace": "oci_mysql_database",
+            "interval": "1m",
+            "start_time": "2026-03-12T06:00:00Z",
+            "end_time": "2026-03-12T07:00:00Z",
+            "bench_start": "2026-03-12T06:29:00Z",
+            "bench_end": "2026-03-12T06:33:00Z",
+            "report_title": "OCI MySQL Benchmark Report",
+        },
+    },
+    "pg_benchmark": {
+        "name": "PostgreSQL Benchmark Sample",
+        "description": "OCI PostgreSQL HA - PGBench benchmark metrics (2 OCPU/32GB)",
+        "config": {
+            "oci_config_file": "~/.oci/config",
+            "oci_profile": "DEFAULT",
+            "compartment_id": "ocid1.compartment.oc1..aaaaaaaacnzhu2qnecid46t3nhmptegxzrvbv753r4fwffpa23bd5kbqzaua",
+            "namespace": "oci_postgresql",
+            "interval": "1m",
+            "start_time": "2026-03-10T09:00:00Z",
+            "end_time": "2026-03-10T10:00:00Z",
+            "bench_start": "2026-03-10T09:15:00Z",
+            "bench_end": "2026-03-10T09:45:00Z",
+            "report_title": "OCI PostgreSQL PGBench Report",
+        },
+    },
+    "mysql_loadtest": {
+        "name": "MySQL Load Test Template",
+        "description": "Template for MySQL sysbench load test (edit times)",
+        "config": {
+            "oci_config_file": "~/.oci/config",
+            "oci_profile": "DEFAULT",
+            "compartment_id": "",
+            "namespace": "oci_mysql_database",
+            "interval": "1m",
+            "start_time": "",
+            "end_time": "",
+            "bench_start": "",
+            "bench_end": "",
+            "report_title": "OCI MySQL Load Test Report",
+        },
+    },
+}
+
+
+@app.route("/api/samples")
+def api_samples():
+    return jsonify([
+        {"id": k, "name": v["name"], "description": v["description"]}
+        for k, v in SAMPLE_CONFIGS.items()
+    ])
+
+
+@app.route("/api/samples/<sample_id>")
+def api_sample(sample_id):
+    sample = SAMPLE_CONFIGS.get(sample_id)
+    if not sample:
+        return jsonify({"error": "Not found"}), 404
+    return jsonify(sample["config"])
+
+
+if __name__ == "__main__":
+    os.makedirs(app.config["OUTPUT_BASE"], exist_ok=True)
+    app.run(host="0.0.0.0", port=5050, debug=True)

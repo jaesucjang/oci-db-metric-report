@@ -1,0 +1,521 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>OCI DB Metric Report</title>
+  <style>
+    :root {
+      --primary: #0969da;
+      --primary-dark: #0550ae;
+      --success: #1a7f37;
+      --danger: #cf222e;
+      --warning: #bf8700;
+      --bg: #f6f8fa;
+      --card: #ffffff;
+      --border: #d0d7de;
+      --text: #1f2328;
+      --text-muted: #656d76;
+      --radius: 8px;
+    }
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+      background: var(--bg); color: var(--text); line-height: 1.6;
+    }
+    .header {
+      background: linear-gradient(135deg, #1a1a2e 0%, #16213e 50%, #0f3460 100%);
+      color: white; padding: 32px 0; text-align: center;
+    }
+    .header h1 { font-size: 28px; font-weight: 700; }
+    .header p { color: #8b949e; margin-top: 8px; font-size: 15px; }
+    .container { max-width: 1100px; margin: 0 auto; padding: 24px 16px; }
+
+    /* Tabs */
+    .tabs { display: flex; gap: 0; border-bottom: 2px solid var(--border); margin-bottom: 24px; }
+    .tab {
+      padding: 10px 20px; cursor: pointer; font-weight: 600; font-size: 14px;
+      border-bottom: 2px solid transparent; margin-bottom: -2px; color: var(--text-muted);
+      transition: all .2s;
+    }
+    .tab:hover { color: var(--text); }
+    .tab.active { color: var(--primary); border-bottom-color: var(--primary); }
+    .tab-content { display: none; }
+    .tab-content.active { display: block; }
+
+    /* Cards */
+    .card {
+      background: var(--card); border: 1px solid var(--border);
+      border-radius: var(--radius); padding: 24px; margin-bottom: 20px;
+    }
+    .card h3 { font-size: 16px; margin-bottom: 16px; color: var(--text); }
+
+    /* Form */
+    .form-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
+    .form-group { display: flex; flex-direction: column; }
+    .form-group.full { grid-column: 1 / -1; }
+    .form-group label {
+      font-size: 13px; font-weight: 600; color: var(--text-muted); margin-bottom: 4px;
+    }
+    .form-group label .required { color: var(--danger); }
+    .form-group input, .form-group select {
+      padding: 8px 12px; border: 1px solid var(--border); border-radius: 6px;
+      font-size: 14px; background: var(--bg); transition: border-color .2s;
+    }
+    .form-group input:focus, .form-group select:focus {
+      outline: none; border-color: var(--primary); box-shadow: 0 0 0 3px rgba(9,105,218,.12);
+    }
+    .hint { font-size: 11px; color: var(--text-muted); margin-top: 2px; }
+
+    /* Buttons */
+    .btn {
+      padding: 10px 20px; border: none; border-radius: 6px; font-size: 14px;
+      font-weight: 600; cursor: pointer; transition: all .2s; display: inline-flex;
+      align-items: center; gap: 6px;
+    }
+    .btn-primary { background: var(--primary); color: white; }
+    .btn-primary:hover { background: var(--primary-dark); }
+    .btn-primary:disabled { background: #8b949e; cursor: not-allowed; }
+    .btn-outline {
+      background: transparent; color: var(--primary); border: 1px solid var(--border);
+    }
+    .btn-outline:hover { background: var(--bg); }
+    .btn-sm { padding: 6px 12px; font-size: 12px; }
+
+    /* Samples */
+    .sample-cards { display: grid; grid-template-columns: repeat(auto-fill, minmax(300px, 1fr)); gap: 12px; }
+    .sample-card {
+      border: 1px solid var(--border); border-radius: var(--radius); padding: 16px;
+      cursor: pointer; transition: all .2s; background: var(--card);
+    }
+    .sample-card:hover { border-color: var(--primary); box-shadow: 0 2px 8px rgba(0,0,0,.08); }
+    .sample-card h4 { font-size: 14px; margin-bottom: 4px; }
+    .sample-card p { font-size: 12px; color: var(--text-muted); }
+
+    /* Progress */
+    .progress-container { display: none; }
+    .progress-container.active { display: block; }
+    .progress-bar-bg {
+      height: 8px; background: #e1e4e8; border-radius: 4px; overflow: hidden; margin: 12px 0;
+    }
+    .progress-bar {
+      height: 100%; background: var(--primary); border-radius: 4px;
+      transition: width .5s ease; width: 0%;
+    }
+    .status-label {
+      font-size: 13px; font-weight: 600; display: flex; align-items: center; gap: 8px;
+    }
+    .status-dot {
+      width: 8px; height: 8px; border-radius: 50%; display: inline-block;
+    }
+    .status-dot.collecting { background: var(--warning); animation: pulse 1s infinite; }
+    .status-dot.charting { background: var(--primary); animation: pulse 1s infinite; }
+    .status-dot.reporting { background: #8250df; animation: pulse 1s infinite; }
+    .status-dot.done { background: var(--success); }
+    .status-dot.error { background: var(--danger); }
+    @keyframes pulse { 0%,100% { opacity: 1; } 50% { opacity: .4; } }
+
+    /* Log */
+    .log-box {
+      background: #0d1117; color: #c9d1d9; padding: 16px; border-radius: 6px;
+      font-family: 'SF Mono', 'Consolas', monospace; font-size: 12px;
+      max-height: 300px; overflow-y: auto; white-space: pre-wrap; word-break: break-all;
+      margin-top: 12px; display: none;
+    }
+    .log-box.show { display: block; }
+
+    /* Results */
+    .results { display: none; }
+    .results.active { display: block; }
+    .chart-grid { display: grid; grid-template-columns: 1fr; gap: 20px; }
+    .chart-item img {
+      width: 100%; border: 1px solid var(--border); border-radius: 6px;
+      cursor: pointer; transition: transform .2s;
+    }
+    .chart-item img:hover { transform: scale(1.01); }
+    .chart-label { font-size: 13px; font-weight: 600; margin-bottom: 8px; color: var(--text-muted); }
+
+    /* Stats table */
+    .stats-table { width: 100%; border-collapse: collapse; font-size: 13px; }
+    .stats-table th {
+      text-align: left; padding: 8px 12px; border-bottom: 2px solid var(--border);
+      font-weight: 600; color: var(--text-muted); font-size: 12px;
+    }
+    .stats-table td {
+      padding: 6px 12px; border-bottom: 1px solid #eee; font-family: 'SF Mono', monospace;
+    }
+    .stats-table tr:hover { background: var(--bg); }
+
+    /* Jobs list */
+    .job-item {
+      display: flex; align-items: center; gap: 12px; padding: 12px;
+      border: 1px solid var(--border); border-radius: 6px; margin-bottom: 8px;
+      cursor: pointer; transition: all .2s;
+    }
+    .job-item:hover { border-color: var(--primary); background: #f0f6ff; }
+    .badge {
+      padding: 2px 8px; border-radius: 12px; font-size: 11px; font-weight: 600;
+    }
+    .badge-done { background: #dafbe1; color: var(--success); }
+    .badge-error { background: #ffebe9; color: var(--danger); }
+    .badge-running { background: #ddf4ff; color: var(--primary); }
+
+    /* Modal */
+    .modal-overlay {
+      display: none; position: fixed; top: 0; left: 0; right: 0; bottom: 0;
+      background: rgba(0,0,0,.6); z-index: 100; justify-content: center; align-items: center;
+    }
+    .modal-overlay.show { display: flex; }
+    .modal-img { max-width: 95vw; max-height: 95vh; border-radius: 8px; }
+
+    .actions { display: flex; gap: 8px; margin-top: 16px; flex-wrap: wrap; }
+
+    @media (max-width: 768px) {
+      .form-grid { grid-template-columns: 1fr; }
+      .sample-cards { grid-template-columns: 1fr; }
+    }
+  </style>
+</head>
+<body>
+
+<div class="header">
+  <h1>OCI DB Metric Report</h1>
+  <p>Collect OCI Database monitoring metrics, generate charts & reports</p>
+</div>
+
+<div class="container">
+  <!-- Tabs -->
+  <div class="tabs">
+    <div class="tab active" data-tab="new">New Report</div>
+    <div class="tab" data-tab="history">History</div>
+  </div>
+
+  <!-- Tab: New Report -->
+  <div class="tab-content active" id="tab-new">
+
+    <!-- Sample configs -->
+    <div class="card">
+      <h3>Sample Configs</h3>
+      <div class="sample-cards" id="sampleCards"></div>
+    </div>
+
+    <!-- Config form -->
+    <div class="card">
+      <h3>Configuration</h3>
+      <form id="configForm">
+        <div class="form-grid">
+          <div class="form-group">
+            <label>OCI Config File</label>
+            <input type="text" name="oci_config_file" value="~/.oci/config">
+          </div>
+          <div class="form-group">
+            <label>OCI Profile</label>
+            <input type="text" name="oci_profile" value="DEFAULT">
+          </div>
+          <div class="form-group full">
+            <label>Compartment OCID <span class="required">*</span></label>
+            <input type="text" name="compartment_id" placeholder="ocid1.compartment.oc1..aaaa..." required>
+          </div>
+          <div class="form-group">
+            <label>Namespace <span class="required">*</span></label>
+            <select name="namespace" required>
+              <option value="oci_mysql_database">MySQL (oci_mysql_database)</option>
+              <option value="oci_postgresql">PostgreSQL (oci_postgresql)</option>
+            </select>
+          </div>
+          <div class="form-group">
+            <label>Interval</label>
+            <select name="interval">
+              <option value="1m" selected>1 min</option>
+              <option value="5m">5 min</option>
+              <option value="1h">1 hour</option>
+            </select>
+          </div>
+          <div class="form-group">
+            <label>Start Time (UTC) <span class="required">*</span></label>
+            <input type="datetime-local" name="start_time" required>
+            <span class="hint">UTC timezone</span>
+          </div>
+          <div class="form-group">
+            <label>End Time (UTC) <span class="required">*</span></label>
+            <input type="datetime-local" name="end_time" required>
+            <span class="hint">UTC timezone</span>
+          </div>
+          <div class="form-group">
+            <label>Benchmark Start (optional)</label>
+            <input type="datetime-local" name="bench_start">
+            <span class="hint">Chart highlight start</span>
+          </div>
+          <div class="form-group">
+            <label>Benchmark End (optional)</label>
+            <input type="datetime-local" name="bench_end">
+            <span class="hint">Chart highlight end</span>
+          </div>
+          <div class="form-group full">
+            <label>Report Title</label>
+            <input type="text" name="report_title" value="OCI DB Metric Report">
+          </div>
+        </div>
+        <div class="actions">
+          <button type="submit" class="btn btn-primary" id="runBtn">
+            Generate Report
+          </button>
+        </div>
+      </form>
+    </div>
+
+    <!-- Progress -->
+    <div class="progress-container" id="progressArea">
+      <div class="card">
+        <div class="status-label">
+          <span class="status-dot" id="statusDot"></span>
+          <span id="statusText">Queued...</span>
+        </div>
+        <div class="progress-bar-bg">
+          <div class="progress-bar" id="progressBar"></div>
+        </div>
+        <div class="actions">
+          <button class="btn btn-outline btn-sm" onclick="toggleLog()">Toggle Log</button>
+        </div>
+        <div class="log-box" id="logBox"></div>
+      </div>
+    </div>
+
+    <!-- Results -->
+    <div class="results" id="resultsArea">
+      <div class="card">
+        <h3>Charts</h3>
+        <div class="chart-grid" id="chartGrid"></div>
+      </div>
+      <div class="card">
+        <h3>Statistics</h3>
+        <div style="overflow-x:auto;">
+          <table class="stats-table" id="statsTable">
+            <thead>
+              <tr>
+                <th>Metric</th><th>Mean</th><th>Max</th><th>Min</th><th>P95</th><th>Std</th>
+              </tr>
+            </thead>
+            <tbody></tbody>
+          </table>
+        </div>
+      </div>
+      <div class="card">
+        <h3>Downloads</h3>
+        <div class="actions" id="downloadLinks"></div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Tab: History -->
+  <div class="tab-content" id="tab-history">
+    <div class="card">
+      <h3>Previous Jobs</h3>
+      <div id="jobList"><p style="color:var(--text-muted);font-size:14px;">No jobs yet.</p></div>
+    </div>
+  </div>
+</div>
+
+<!-- Image modal -->
+<div class="modal-overlay" id="modal" onclick="this.classList.remove('show')">
+  <img class="modal-img" id="modalImg" src="">
+</div>
+
+<script>
+// --- Tab switching ---
+document.querySelectorAll('.tab').forEach(t => {
+  t.addEventListener('click', () => {
+    document.querySelectorAll('.tab').forEach(x => x.classList.remove('active'));
+    document.querySelectorAll('.tab-content').forEach(x => x.classList.remove('active'));
+    t.classList.add('active');
+    document.getElementById('tab-' + t.dataset.tab).classList.add('active');
+    if (t.dataset.tab === 'history') loadJobs();
+  });
+});
+
+// --- Load samples ---
+fetch('/api/samples').then(r => r.json()).then(samples => {
+  const el = document.getElementById('sampleCards');
+  el.innerHTML = samples.map(s => `
+    <div class="sample-card" onclick="loadSample('${s.id}')">
+      <h4>${s.name}</h4>
+      <p>${s.description}</p>
+    </div>
+  `).join('');
+});
+
+function loadSample(id) {
+  fetch('/api/samples/' + id).then(r => r.json()).then(cfg => {
+    const form = document.getElementById('configForm');
+    Object.entries(cfg).forEach(([k, v]) => {
+      const el = form.elements[k];
+      if (!el) return;
+      if (k.includes('time') && v) {
+        // Convert ISO to datetime-local format
+        el.value = v.replace('Z', '').replace('+00:00', '');
+      } else {
+        el.value = v;
+      }
+    });
+  });
+}
+
+// --- Datetime to ISO ---
+function toISO(val) {
+  if (!val) return '';
+  return val.includes('Z') ? val : val + 'Z';
+}
+
+// --- Form submit ---
+let currentJobId = null;
+document.getElementById('configForm').addEventListener('submit', function(e) {
+  e.preventDefault();
+  const fd = new FormData(this);
+  const data = {};
+  for (const [k, v] of fd.entries()) {
+    if (k.includes('time') && v) data[k] = toISO(v);
+    else data[k] = v;
+  }
+
+  document.getElementById('runBtn').disabled = true;
+  document.getElementById('progressArea').classList.add('active');
+  document.getElementById('resultsArea').classList.remove('active');
+  document.getElementById('logBox').textContent = '';
+  document.getElementById('logBox').classList.remove('show');
+
+  fetch('/api/run', {
+    method: 'POST',
+    headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify(data),
+  }).then(r => r.json()).then(res => {
+    currentJobId = res.job_id;
+    pollStatus();
+  });
+});
+
+// --- Poll status ---
+function pollStatus() {
+  if (!currentJobId) return;
+  fetch('/api/status/' + currentJobId).then(r => r.json()).then(s => {
+    const dot = document.getElementById('statusDot');
+    const text = document.getElementById('statusText');
+    const bar = document.getElementById('progressBar');
+
+    dot.className = 'status-dot ' + s.status;
+    bar.style.width = s.progress + '%';
+
+    const labels = {
+      queued: 'Queued...', collecting: 'Collecting metrics from OCI...',
+      charting: 'Generating charts...', reporting: 'Building report...',
+      done: 'Complete!', error: 'Error: ' + (s.error || ''),
+    };
+    text.textContent = labels[s.status] || s.status;
+
+    // Update log
+    fetch('/api/log/' + currentJobId).then(r => r.json()).then(l => {
+      document.getElementById('logBox').textContent = l.log;
+    });
+
+    if (s.status === 'done') {
+      document.getElementById('runBtn').disabled = false;
+      showResults(s);
+    } else if (s.status === 'error') {
+      document.getElementById('runBtn').disabled = false;
+      bar.style.background = 'var(--danger)';
+    } else {
+      setTimeout(pollStatus, 2000);
+    }
+  });
+}
+
+function toggleLog() {
+  document.getElementById('logBox').classList.toggle('show');
+}
+
+// --- Show results ---
+function showResults(status) {
+  const results = document.getElementById('resultsArea');
+  results.classList.add('active');
+
+  // Charts
+  const grid = document.getElementById('chartGrid');
+  const charts = [
+    ['chart_overview.png', 'Overview - All Metrics by Category'],
+    ['chart_detail.png', 'Detail - Individual Metrics'],
+    ['chart_zoom.png', 'Benchmark Zoom-in'],
+  ];
+  grid.innerHTML = charts.map(([file, label]) => `
+    <div class="chart-item">
+      <div class="chart-label">${label}</div>
+      <img src="/api/chart/${currentJobId}/${file}"
+           onclick="showModal(this.src)"
+           onerror="this.parentElement.style.display='none'">
+    </div>
+  `).join('');
+
+  // Stats
+  if (status.stats) {
+    const tbody = document.querySelector('#statsTable tbody');
+    tbody.innerHTML = status.stats.map(r => `
+      <tr>
+        <td style="font-weight:600">${r.metric}</td>
+        <td>${fmtNum(r.mean)}</td>
+        <td style="color:var(--danger)">${fmtNum(r.max)}</td>
+        <td>${fmtNum(r.min)}</td>
+        <td>${fmtNum(r.p95)}</td>
+        <td>${fmtNum(r.std)}</td>
+      </tr>
+    `).join('');
+  }
+
+  // Downloads
+  const dl = document.getElementById('downloadLinks');
+  dl.innerHTML = [
+    ['REPORT.md', 'Markdown Report'],
+    ['stats_summary.csv', 'Stats CSV'],
+    ['chart_overview.png', 'Overview Chart'],
+    ['chart_detail.png', 'Detail Chart'],
+    ['chart_zoom.png', 'Zoom Chart'],
+  ].map(([f, l]) => `
+    <a href="/api/download/${currentJobId}/${f}" class="btn btn-outline btn-sm">${l}</a>
+  `).join('');
+}
+
+function fmtNum(v) {
+  v = parseFloat(v);
+  if (isNaN(v)) return '-';
+  if (Math.abs(v) >= 1e9) return (v/1e9).toFixed(1) + 'G';
+  if (Math.abs(v) >= 1e6) return (v/1e6).toFixed(1) + 'M';
+  if (Math.abs(v) >= 1e3) return (v/1e3).toFixed(1) + 'K';
+  return v.toFixed(1);
+}
+
+function showModal(src) {
+  document.getElementById('modalImg').src = src;
+  document.getElementById('modal').classList.add('show');
+}
+
+// --- Jobs history ---
+function loadJobs() {
+  fetch('/api/jobs').then(r => r.json()).then(jobs => {
+    const el = document.getElementById('jobList');
+    if (!jobs.length) { el.innerHTML = '<p style="color:var(--text-muted);font-size:14px;">No jobs yet.</p>'; return; }
+    el.innerHTML = jobs.map(j => {
+      const badge = j.status === 'done' ? 'badge-done'
+                  : j.status === 'error' ? 'badge-error' : 'badge-running';
+      return `
+        <div class="job-item" onclick="window.location='/report/${j.id}'">
+          <span class="badge ${badge}">${j.status}</span>
+          <div style="flex:1">
+            <div style="font-weight:600;font-size:14px">${j.title || j.namespace}</div>
+            <div style="font-size:12px;color:var(--text-muted)">${j.created_at}</div>
+          </div>
+          <div style="font-size:12px;color:var(--text-muted)">${j.namespace}</div>
+        </div>
+      `;
+    }).join('');
+  });
+}
+</script>
+</body>
+</html>

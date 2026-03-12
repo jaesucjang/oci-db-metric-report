@@ -3,11 +3,28 @@
 OCI Database (PostgreSQL / MySQL HeatWave) 모니터링 메트릭을 시계열로 수집하고,
 차트 + 통계 + Markdown 리포트를 자동 생성하는 도구입니다.
 
-## Quick Start
+**CLI** + **Web UI** 두 가지 방식 지원.
+
+## Quick Start (Web UI)
+
+```bash
+git clone https://github.com/jaesucjang/oci-db-metric-report.git
+cd oci-db-metric-report
+pip3 install -r requirements.txt
+python3 app.py
+# → http://localhost:5050 접속
+```
+
+1. **Sample Configs** 에서 MySQL/PostgreSQL 샘플 클릭 → 자동 입력
+2. Compartment ID, 시간 범위 수정
+3. **Generate Report** 클릭 → 수집 → 차트 → 리포트 자동 생성
+4. 결과 차트/통계/다운로드 확인
+
+## Quick Start (CLI)
 
 ```bash
 # 1. Clone
-git clone https://github.com/jaesujan/oci-db-metric-report.git
+git clone https://github.com/jaesucjang/oci-db-metric-report.git
 cd oci-db-metric-report
 
 # 2. Python 의존성 설치
@@ -134,15 +151,29 @@ output/metrics_oci_mysql_database_20260312_120000/
 
 > PostgreSQL HA 환경에서는 PRIMARY / READ_REPLICA 노드별로 분리 수집됩니다.
 
+## Web UI Features
+
+- **Sample Configs**: MySQL Benchmark / PostgreSQL Benchmark / Load Test 템플릿 원클릭 로드
+- **Real-time Progress**: 수집 → 차트 → 리포트 단계별 진행률 표시
+- **Live Log**: OCI CLI 실행 로그 실시간 확인
+- **Interactive Charts**: 차트 클릭 시 확대 모달
+- **Statistics Table**: Mean/Max/Min/P95/Std 테이블
+- **Download**: 차트 PNG, 통계 CSV, Markdown 리포트 개별 다운로드
+- **History**: 이전 실행 내역 조회
+
 ## File Structure
 
 ```
 oci-db-metric-report/
 ├── README.md                 # 이 문서
-├── config.env.example        # 설정 템플릿
+├── app.py                    # Flask 웹 서비스
+├── templates/
+│   ├── index.html            # 메인 대시보드
+│   └── report.html           # 리포트 뷰어
+├── config.env.example        # CLI용 설정 템플릿
 ├── fetch_metrics.sh          # 메트릭 수집 스크립트
 ├── generate_charts.py        # 차트 생성 (Python)
-├── generate_report.sh        # All-in-One 리포트 생성
+├── generate_report.sh        # All-in-One 리포트 생성 (CLI)
 ├── requirements.txt          # Python 의존성
 ├── .gitignore                # output/, config.env 제외
 └── output/                   # (gitignore) 수집 결과
