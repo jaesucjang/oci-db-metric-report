@@ -299,6 +299,63 @@ def view_report(job_id):
 
 
 # ============================================================
+# OCI Config File Parser - read profile sections
+# ============================================================
+
+def parse_oci_config(config_path):
+    """Parse OCI config file and return list of profile sections with metadata."""
+    config_path = os.path.expanduser(config_path)
+    if not os.path.isfile(config_path):
+        return []
+
+    profiles = []
+    current = None
+
+    with open(config_path) as f:
+        for line in f:
+            line = line.strip()
+            if not line or line.startswith("#"):
+                continue
+            # Section header: [DEFAULT], [WESANG_POC], etc.
+            if line.startswith("[") and line.endswith("]"):
+                if current:
+                    profiles.append(current)
+                section_name = line[1:-1]
+                current = {"name": section_name, "region": "", "tenancy_short": "", "user_short": ""}
+            elif current and "=" in line:
+                key, _, val = line.partition("=")
+                key = key.strip()
+                val = val.strip()
+                if key == "region":
+                    current["region"] = val
+                elif key == "tenancy":
+                    current["tenancy_short"] = val[:30] + "..." if len(val) > 30 else val
+                elif key == "user":
+                    current["user_short"] = val[:30] + "..." if len(val) > 30 else val
+
+    if current:
+        profiles.append(current)
+
+    return profiles
+
+
+@app.route("/api/oci-config-profiles")
+def api_oci_config_profiles():
+    """Return profile sections from an OCI config file."""
+    config_path = request.args.get("config_file", "~/.oci/config")
+
+    # Also check saved profiles
+    profile_id = request.args.get("profile_id", "")
+    if profile_id:
+        saved_config, _ = get_profile_oci_paths(profile_id)
+        if saved_config:
+            config_path = saved_config
+
+    profiles = parse_oci_config(config_path)
+    return jsonify(profiles)
+
+
+# ============================================================
 # OCI Profile Management API
 # ============================================================
 

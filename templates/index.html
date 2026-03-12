@@ -217,11 +217,17 @@
           </div>
           <div class="form-group" id="manualConfigGroup">
             <label>OCI Config File</label>
-            <input type="text" name="oci_config_file" value="~/.oci/config">
+            <div style="display:flex;gap:8px;align-items:center;">
+              <input type="text" name="oci_config_file" id="ociConfigFile" value="~/.oci/config" style="flex:1;">
+              <button type="button" class="btn btn-outline btn-sm" onclick="loadConfigProfiles()">Load</button>
+            </div>
           </div>
           <div class="form-group" id="manualProfileGroup">
             <label>CLI Profile Name</label>
-            <input type="text" name="oci_profile" value="DEFAULT">
+            <select name="oci_profile" id="ociProfileName">
+              <option value="DEFAULT">DEFAULT</option>
+            </select>
+            <span class="hint">Config 파일의 프로파일 섹션 목록 (Load 버튼으로 갱신)</span>
           </div>
           <div class="form-group full">
             <label>Compartment OCID <span class="required">*</span></label>
@@ -426,6 +432,48 @@ function onProfileChange() {
   const manual = !sel.value;
   document.getElementById('manualConfigGroup').style.display = manual ? '' : 'none';
   document.getElementById('manualProfileGroup').style.display = manual ? '' : 'none';
+
+  // If a saved profile is selected, load its config profiles too
+  if (sel.value) {
+    fetch('/api/oci-config-profiles?profile_id=' + encodeURIComponent(sel.value))
+      .then(r => r.json()).then(renderProfileOptions);
+  }
+}
+
+function loadConfigProfiles() {
+  const configFile = document.getElementById('ociConfigFile').value.trim();
+  if (!configFile) return;
+
+  const profileId = document.getElementById('profileSelect').value;
+  let url = '/api/oci-config-profiles?config_file=' + encodeURIComponent(configFile);
+  if (profileId) url += '&profile_id=' + encodeURIComponent(profileId);
+
+  fetch(url).then(r => r.json()).then(profiles => {
+    renderProfileOptions(profiles);
+    if (profiles.length === 0) {
+      alert('No profiles found in: ' + configFile + '\nCheck if the file exists on the server.');
+    }
+  });
+}
+
+function renderProfileOptions(profiles) {
+  const sel = document.getElementById('ociProfileName');
+  const prev = sel.value;
+  sel.innerHTML = '';
+  if (profiles.length === 0) {
+    sel.innerHTML = '<option value="DEFAULT">DEFAULT</option>';
+    return;
+  }
+  profiles.forEach(p => {
+    const opt = document.createElement('option');
+    opt.value = p.name;
+    opt.textContent = p.name + (p.region ? ' (' + p.region + ')' : '');
+    sel.appendChild(opt);
+  });
+  // Restore previous selection if still available
+  if (prev && [...sel.options].some(o => o.value === prev)) {
+    sel.value = prev;
+  }
 }
 
 function loadKeyFile(input) {
@@ -523,8 +571,9 @@ function deleteProfile(id) {
   });
 }
 
-// Init: load profiles
+// Init: load profiles + config sections
 loadProfiles();
+loadConfigProfiles();
 
 // --- Load samples ---
 fetch('/api/samples').then(r => r.json()).then(samples => {
