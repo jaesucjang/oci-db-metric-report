@@ -249,24 +249,24 @@
             </select>
           </div>
           <div class="form-group">
-            <label>Start Time (UTC) <span class="required">*</span></label>
+            <label>Start Time (KST) <span class="required">*</span></label>
             <input type="datetime-local" name="start_time" required>
-            <span class="hint">UTC timezone</span>
+            <span class="hint">한국 시간 (KST, UTC+9) 기준 입력</span>
           </div>
           <div class="form-group">
-            <label>End Time (UTC) <span class="required">*</span></label>
+            <label>End Time (KST) <span class="required">*</span></label>
             <input type="datetime-local" name="end_time" required>
-            <span class="hint">UTC timezone</span>
+            <span class="hint">한국 시간 (KST, UTC+9) 기준 입력</span>
           </div>
           <div class="form-group">
-            <label>Benchmark Start (optional)</label>
+            <label>Benchmark Start (KST, optional)</label>
             <input type="datetime-local" name="bench_start">
-            <span class="hint">Chart highlight start</span>
+            <span class="hint">벤치마크 시작 시각 (차트 하이라이트)</span>
           </div>
           <div class="form-group">
-            <label>Benchmark End (optional)</label>
+            <label>Benchmark End (KST, optional)</label>
             <input type="datetime-local" name="bench_end">
-            <span class="hint">Chart highlight end</span>
+            <span class="hint">벤치마크 종료 시각</span>
           </div>
           <div class="form-group full">
             <label>Report Title</label>
@@ -586,6 +586,15 @@ fetch('/api/samples').then(r => r.json()).then(samples => {
   `).join('');
 });
 
+// --- UTC ISO string to KST datetime-local string ---
+function utcToKST(iso) {
+  if (!iso) return '';
+  const utc = new Date(iso.endsWith('Z') ? iso : iso + 'Z');
+  const kst = new Date(utc.getTime() + 9 * 60 * 60 * 1000);
+  const pad = n => String(n).padStart(2, '0');
+  return `${kst.getFullYear()}-${pad(kst.getMonth()+1)}-${pad(kst.getDate())}T${pad(kst.getHours())}:${pad(kst.getMinutes())}`;
+}
+
 function loadSample(id) {
   fetch('/api/samples/' + id).then(r => r.json()).then(cfg => {
     const form = document.getElementById('configForm');
@@ -593,8 +602,8 @@ function loadSample(id) {
       const el = form.elements[k];
       if (!el) return;
       if (k.includes('time') && v) {
-        // Convert ISO to datetime-local format
-        el.value = v.replace('Z', '').replace('+00:00', '');
+        // Convert UTC to KST for display
+        el.value = utcToKST(v);
       } else {
         el.value = v;
       }
@@ -602,10 +611,15 @@ function loadSample(id) {
   });
 }
 
-// --- Datetime to ISO ---
+// --- KST to UTC ISO conversion (subtract 9 hours) ---
 function toISO(val) {
   if (!val) return '';
-  return val.includes('Z') ? val : val + 'Z';
+  if (val.includes('Z')) return val;
+  // Input is KST — subtract 9 hours to get UTC
+  const kst = new Date(val);
+  const utc = new Date(kst.getTime() - 9 * 60 * 60 * 1000);
+  const pad = n => String(n).padStart(2, '0');
+  return `${utc.getFullYear()}-${pad(utc.getMonth()+1)}-${pad(utc.getDate())}T${pad(utc.getHours())}:${pad(utc.getMinutes())}:${pad(utc.getSeconds())}Z`;
 }
 
 // --- Form submit ---

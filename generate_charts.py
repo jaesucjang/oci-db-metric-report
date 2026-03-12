@@ -20,6 +20,9 @@ import glob
 import pandas as pd
 import matplotlib.pyplot as plt
 import matplotlib.dates as mdates
+from datetime import timedelta
+
+KST_OFFSET = timedelta(hours=9)
 
 # ============================================================
 # Category definitions
@@ -140,6 +143,7 @@ def load_metrics(metrics_dir):
             continue
         df = pd.read_csv(f, names=["timestamp", "value"], parse_dates=["timestamp"])
         if not df.empty:
+            df["timestamp"] = df["timestamp"] + KST_OFFSET  # Convert UTC → KST
             metrics[name] = df.set_index("timestamp").sort_index()["value"]
     return metrics
 
@@ -152,9 +156,17 @@ def load_metadata(metrics_dir):
     return {}
 
 
+def parse_bench_kst(meta, key):
+    """Parse bench time from metadata and convert UTC → KST."""
+    val = meta.get(key)
+    if not val:
+        return None
+    return pd.Timestamp(val) + KST_OFFSET
+
+
 def chart_overview(metrics, categories, meta, output_path):
-    bench_start = pd.Timestamp(meta["bench_start"]) if meta.get("bench_start") else None
-    bench_end = pd.Timestamp(meta["bench_end"]) if meta.get("bench_end") else None
+    bench_start = parse_bench_kst(meta, "bench_start")
+    bench_end = parse_bench_kst(meta, "bench_end")
     title = meta.get("report_title", "OCI DB Metric Report")
 
     active_cats = {k: v for k, v in categories.items()
@@ -181,7 +193,7 @@ def chart_overview(metrics, categories, meta, output_path):
         ax.xaxis.set_major_formatter(mdates.DateFormatter("%H:%M"))
         ax.xaxis.set_major_locator(mdates.MinuteLocator(interval=5))
 
-    axes[-1].set_xlabel("Time (UTC)", fontsize=11)
+    axes[-1].set_xlabel("Time (KST, UTC+9)", fontsize=11)
     period = f"{meta.get('start_time','')} ~ {meta.get('end_time','')}"
     fig.suptitle(f"{title} - Overview ({period})", fontsize=14, fontweight="bold", y=1.01)
     plt.tight_layout()
@@ -198,8 +210,8 @@ def chart_detail(metrics, meta, output_path):
     cols = 3
     rows = (n + cols - 1) // cols
 
-    bench_start = pd.Timestamp(meta["bench_start"]) if meta.get("bench_start") else None
-    bench_end = pd.Timestamp(meta["bench_end"]) if meta.get("bench_end") else None
+    bench_start = parse_bench_kst(meta, "bench_start")
+    bench_end = parse_bench_kst(meta, "bench_end")
 
     fig, axes = plt.subplots(rows, cols, figsize=(18, 3.5 * rows))
     axes = axes.flatten()
@@ -233,8 +245,8 @@ def chart_detail(metrics, meta, output_path):
 
 
 def chart_zoom(metrics, key_metrics, meta, output_path):
-    bench_start = pd.Timestamp(meta["bench_start"]) if meta.get("bench_start") else None
-    bench_end = pd.Timestamp(meta["bench_end"]) if meta.get("bench_end") else None
+    bench_start = parse_bench_kst(meta, "bench_start")
+    bench_end = parse_bench_kst(meta, "bench_end")
     if not bench_start or not bench_end:
         print("  Skipped zoom chart (no benchmark window)")
         return
@@ -274,7 +286,7 @@ def chart_zoom(metrics, key_metrics, meta, output_path):
         ax.xaxis.set_major_formatter(mdates.DateFormatter("%H:%M"))
         ax.xaxis.set_major_locator(mdates.MinuteLocator(interval=1))
 
-    axes[-1].set_xlabel("Time (UTC)", fontsize=11)
+    axes[-1].set_xlabel("Time (KST, UTC+9)", fontsize=11)
     title = meta.get("report_title", "OCI DB Metric Report")
     fig.suptitle(f"{title} - Benchmark Zoom-in", fontsize=14, fontweight="bold")
     plt.tight_layout()
