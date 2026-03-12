@@ -170,6 +170,61 @@
 
     .actions { display: flex; gap: 8px; margin-top: 16px; flex-wrap: wrap; }
 
+    /* Time Range Picker */
+    .time-picker-card { margin-bottom: 0; }
+    .quick-presets { display: flex; gap: 6px; flex-wrap: wrap; margin-bottom: 16px; }
+    .preset-btn {
+      padding: 5px 12px; border: 1px solid var(--border); border-radius: 16px;
+      font-size: 12px; font-weight: 500; cursor: pointer; background: var(--card);
+      color: var(--text); transition: all .2s;
+    }
+    .preset-btn:hover { border-color: var(--primary); color: var(--primary); background: #f0f6ff; }
+    .preset-btn.active { background: var(--primary); color: white; border-color: var(--primary); }
+    .now-label { font-size: 12px; color: var(--text-muted); margin-bottom: 8px; }
+    .now-label strong { color: var(--text); font-size: 13px; }
+
+    .timeline-container { position: relative; margin: 20px 0 12px; user-select: none; }
+    .timeline-track {
+      height: 8px; background: #e1e4e8; border-radius: 4px; position: relative; cursor: pointer;
+    }
+    .timeline-range {
+      position: absolute; height: 100%; background: var(--primary); border-radius: 4px;
+      opacity: 0.4; pointer-events: none;
+    }
+    .timeline-bench {
+      position: absolute; height: 100%; background: #cf222e; border-radius: 4px;
+      opacity: 0.35; pointer-events: none;
+    }
+    .timeline-handle {
+      width: 18px; height: 18px; border-radius: 50%; background: white;
+      border: 2px solid var(--primary); position: absolute; top: 50%; transform: translate(-50%, -50%);
+      cursor: grab; z-index: 10; transition: box-shadow .2s;
+    }
+    .timeline-handle:hover, .timeline-handle.dragging {
+      box-shadow: 0 0 0 4px rgba(9,105,218,.2); cursor: grabbing;
+    }
+    .timeline-handle.bench { border-color: #cf222e; }
+    .timeline-handle.bench:hover, .timeline-handle.bench.dragging {
+      box-shadow: 0 0 0 4px rgba(207,34,46,.2);
+    }
+    .timeline-now {
+      position: absolute; top: -4px; width: 2px; height: 16px; background: var(--success);
+      transform: translateX(-50%); z-index: 5; pointer-events: none;
+    }
+    .timeline-labels {
+      display: flex; justify-content: space-between; font-size: 10px;
+      color: var(--text-muted); margin-top: 4px;
+    }
+    .handle-tooltip {
+      position: absolute; bottom: 22px; left: 50%; transform: translateX(-50%);
+      background: #1f2328; color: white; padding: 3px 8px; border-radius: 4px;
+      font-size: 11px; white-space: nowrap; pointer-events: none; opacity: 0;
+      transition: opacity .15s;
+    }
+    .timeline-handle:hover .handle-tooltip, .timeline-handle.dragging .handle-tooltip { opacity: 1; }
+    .timeline-legend { display: flex; gap: 16px; margin-top: 8px; font-size: 11px; color: var(--text-muted); }
+    .legend-dot { display: inline-block; width: 10px; height: 10px; border-radius: 50%; margin-right: 4px; vertical-align: middle; }
+
     @media (max-width: 768px) {
       .form-grid { grid-template-columns: 1fr; }
       .sample-cards { grid-template-columns: 1fr; }
@@ -248,25 +303,66 @@
               <option value="1h">1 hour</option>
             </select>
           </div>
+          <!-- Time Range Picker -->
+          <div class="form-group full">
+            <div class="now-label">현재 KST: <strong id="nowKST"></strong></div>
+            <label style="margin-bottom:8px">빠른 선택 (현재 시각 기준)</label>
+            <div class="quick-presets" id="quickPresets">
+              <button type="button" class="preset-btn" data-hours="1">최근 1시간</button>
+              <button type="button" class="preset-btn" data-hours="2">최근 2시간</button>
+              <button type="button" class="preset-btn" data-hours="3">최근 3시간</button>
+              <button type="button" class="preset-btn" data-hours="6">최근 6시간</button>
+              <button type="button" class="preset-btn" data-hours="12">최근 12시간</button>
+              <button type="button" class="preset-btn" data-hours="24">최근 24시간</button>
+            </div>
+            <div class="timeline-container" id="timelineContainer">
+              <div class="timeline-track" id="timelineTrack">
+                <div class="timeline-range" id="timelineRange"></div>
+                <div class="timeline-bench" id="timelineBench"></div>
+                <div class="timeline-now" id="timelineNow" title="현재 시각"></div>
+              </div>
+              <!-- Handles: start, end, bench_start, bench_end -->
+              <div class="timeline-handle" id="handleStart" data-field="start_time">
+                <div class="handle-tooltip" id="tipStart"></div>
+              </div>
+              <div class="timeline-handle" id="handleEnd" data-field="end_time">
+                <div class="handle-tooltip" id="tipEnd"></div>
+              </div>
+              <div class="timeline-handle bench" id="handleBenchStart" data-field="bench_start" style="display:none">
+                <div class="handle-tooltip" id="tipBenchStart"></div>
+              </div>
+              <div class="timeline-handle bench" id="handleBenchEnd" data-field="bench_end" style="display:none">
+                <div class="handle-tooltip" id="tipBenchEnd"></div>
+              </div>
+              <div class="timeline-labels" id="timelineLabels"></div>
+            </div>
+            <div class="timeline-legend">
+              <span><span class="legend-dot" style="background:var(--primary);opacity:.5"></span>수집 구간</span>
+              <span><span class="legend-dot" style="background:#cf222e;opacity:.5"></span>벤치마크 구간</span>
+              <span><span class="legend-dot" style="background:var(--success)"></span>현재 시각</span>
+            </div>
+          </div>
+
+          <!-- Hidden datetime-local inputs (synced by timeline) -->
           <div class="form-group">
             <label>Start Time (KST) <span class="required">*</span></label>
-            <input type="datetime-local" name="start_time" required>
-            <span class="hint">한국 시간 (KST, UTC+9) 기준 입력</span>
+            <input type="datetime-local" name="start_time" id="inputStartTime" required>
+            <span class="hint">타임라인 드래그 또는 직접 입력</span>
           </div>
           <div class="form-group">
             <label>End Time (KST) <span class="required">*</span></label>
-            <input type="datetime-local" name="end_time" required>
-            <span class="hint">한국 시간 (KST, UTC+9) 기준 입력</span>
+            <input type="datetime-local" name="end_time" id="inputEndTime" required>
+            <span class="hint">타임라인 드래그 또는 직접 입력</span>
           </div>
           <div class="form-group">
             <label>Benchmark Start (KST, optional)</label>
-            <input type="datetime-local" name="bench_start">
-            <span class="hint">벤치마크 시작 시각 (차트 하이라이트)</span>
+            <input type="datetime-local" name="bench_start" id="inputBenchStart">
+            <span class="hint">벤치마크 시작 (차트 하이라이트)</span>
           </div>
           <div class="form-group">
             <label>Benchmark End (KST, optional)</label>
-            <input type="datetime-local" name="bench_end">
-            <span class="hint">벤치마크 종료 시각</span>
+            <input type="datetime-local" name="bench_end" id="inputBenchEnd">
+            <span class="hint">벤치마크 종료</span>
           </div>
           <div class="form-group full">
             <label>Report Title</label>
@@ -575,6 +671,289 @@ function deleteProfile(id) {
 loadProfiles();
 loadConfigProfiles();
 
+// ============================================================
+// Timeline Range Picker
+// ============================================================
+(function() {
+  const track = document.getElementById('timelineTrack');
+  const container = document.getElementById('timelineContainer');
+  const rangeEl = document.getElementById('timelineRange');
+  const benchEl = document.getElementById('timelineBench');
+  const nowLine = document.getElementById('timelineNow');
+  const labelsEl = document.getElementById('timelineLabels');
+
+  const handles = {
+    start_time:  document.getElementById('handleStart'),
+    end_time:    document.getElementById('handleEnd'),
+    bench_start: document.getElementById('handleBenchStart'),
+    bench_end:   document.getElementById('handleBenchEnd'),
+  };
+  const tips = {
+    start_time:  document.getElementById('tipStart'),
+    end_time:    document.getElementById('tipEnd'),
+    bench_start: document.getElementById('tipBenchStart'),
+    bench_end:   document.getElementById('tipBenchEnd'),
+  };
+  const inputs = {
+    start_time:  document.getElementById('inputStartTime'),
+    end_time:    document.getElementById('inputEndTime'),
+    bench_start: document.getElementById('inputBenchStart'),
+    bench_end:   document.getElementById('inputBenchEnd'),
+  };
+
+  // Timeline window: default 24h ending now (KST)
+  let windowMs = 24 * 3600 * 1000;
+  let windowEnd = Date.now() + 9 * 3600000; // KST
+  let windowStart = windowEnd - windowMs;
+
+  // Handle positions as timestamps (KST epoch-like)
+  let positions = { start_time: 0, end_time: 0, bench_start: 0, bench_end: 0 };
+  let benchVisible = false;
+
+  function kstNow() { return Date.now() + 9 * 3600000; }
+
+  function pad(n) { return String(n).padStart(2, '0'); }
+
+  function formatKST(ts) {
+    const d = new Date(ts);
+    return `${pad(d.getUTCMonth()+1)}/${pad(d.getUTCDate())} ${pad(d.getUTCHours())}:${pad(d.getUTCMinutes())}`;
+  }
+
+  function formatKSTFull(ts) {
+    const d = new Date(ts);
+    return `${d.getUTCFullYear()}-${pad(d.getUTCMonth()+1)}-${pad(d.getUTCDate())}T${pad(d.getUTCHours())}:${pad(d.getUTCMinutes())}`;
+  }
+
+  function pctOf(ts) {
+    return Math.max(0, Math.min(100, (ts - windowStart) / (windowEnd - windowStart) * 100));
+  }
+
+  function tsOfPct(pct) {
+    return windowStart + (pct / 100) * (windowEnd - windowStart);
+  }
+
+  // Snap to nearest minute
+  function snapMinute(ts) {
+    return Math.round(ts / 60000) * 60000;
+  }
+
+  function updateNowDisplay() {
+    const now = kstNow();
+    const d = new Date(now);
+    document.getElementById('nowKST').textContent =
+      `${d.getUTCFullYear()}-${pad(d.getUTCMonth()+1)}-${pad(d.getUTCDate())} ${pad(d.getUTCHours())}:${pad(d.getUTCMinutes())}:${pad(d.getUTCSeconds())}`;
+  }
+  updateNowDisplay();
+  setInterval(updateNowDisplay, 1000);
+
+  function render() {
+    // Now marker
+    const nowPct = pctOf(kstNow());
+    nowLine.style.left = nowPct + '%';
+    nowLine.style.display = (nowPct > 0 && nowPct < 100) ? 'block' : 'none';
+
+    // Main range
+    const sp = pctOf(positions.start_time);
+    const ep = pctOf(positions.end_time);
+    rangeEl.style.left = Math.min(sp, ep) + '%';
+    rangeEl.style.width = Math.abs(ep - sp) + '%';
+
+    handles.start_time.style.left = sp + '%';
+    handles.end_time.style.left = ep + '%';
+    tips.start_time.textContent = formatKST(positions.start_time);
+    tips.end_time.textContent = formatKST(positions.end_time);
+
+    // Bench range
+    if (benchVisible && positions.bench_start && positions.bench_end) {
+      const bsp = pctOf(positions.bench_start);
+      const bep = pctOf(positions.bench_end);
+      benchEl.style.left = Math.min(bsp, bep) + '%';
+      benchEl.style.width = Math.abs(bep - bsp) + '%';
+      benchEl.style.display = 'block';
+      handles.bench_start.style.left = bsp + '%';
+      handles.bench_end.style.left = bep + '%';
+      handles.bench_start.style.display = 'block';
+      handles.bench_end.style.display = 'block';
+      tips.bench_start.textContent = 'B:' + formatKST(positions.bench_start);
+      tips.bench_end.textContent = 'B:' + formatKST(positions.bench_end);
+    } else {
+      benchEl.style.display = 'none';
+      handles.bench_start.style.display = 'none';
+      handles.bench_end.style.display = 'none';
+    }
+
+    // Sync to form inputs
+    inputs.start_time.value = formatKSTFull(positions.start_time);
+    inputs.end_time.value = formatKSTFull(positions.end_time);
+    if (benchVisible && positions.bench_start) {
+      inputs.bench_start.value = formatKSTFull(positions.bench_start);
+      inputs.bench_end.value = formatKSTFull(positions.bench_end);
+    }
+
+    // Timeline hour labels
+    const steps = 6;
+    let html = '';
+    for (let i = 0; i <= steps; i++) {
+      html += `<span>${formatKST(windowStart + (windowEnd - windowStart) * i / steps)}</span>`;
+    }
+    labelsEl.innerHTML = html;
+  }
+
+  // Dragging logic
+  let dragging = null;
+
+  function startDrag(key, e) {
+    e.preventDefault();
+    dragging = key;
+    handles[key].classList.add('dragging');
+    document.body.style.cursor = 'grabbing';
+  }
+
+  function onMove(clientX) {
+    if (!dragging) return;
+    const rect = track.getBoundingClientRect();
+    let pct = (clientX - rect.left) / rect.width * 100;
+    pct = Math.max(0, Math.min(100, pct));
+    positions[dragging] = snapMinute(tsOfPct(pct));
+    render();
+  }
+
+  function stopDrag() {
+    if (dragging) {
+      handles[dragging].classList.remove('dragging');
+      dragging = null;
+      document.body.style.cursor = '';
+    }
+  }
+
+  // Mouse events on handles
+  Object.keys(handles).forEach(key => {
+    handles[key].addEventListener('mousedown', e => startDrag(key, e));
+    handles[key].addEventListener('touchstart', e => {
+      startDrag(key, e);
+    }, { passive: false });
+  });
+
+  document.addEventListener('mousemove', e => onMove(e.clientX));
+  document.addEventListener('touchmove', e => {
+    if (dragging) { e.preventDefault(); onMove(e.touches[0].clientX); }
+  }, { passive: false });
+  document.addEventListener('mouseup', stopDrag);
+  document.addEventListener('touchend', stopDrag);
+
+  // Click on track to move nearest handle
+  track.addEventListener('click', function(e) {
+    if (dragging) return;
+    const rect = track.getBoundingClientRect();
+    const pct = (e.clientX - rect.left) / rect.width * 100;
+    const ts = snapMinute(tsOfPct(pct));
+    // Find nearest among start/end
+    const ds = Math.abs(positions.start_time - ts);
+    const de = Math.abs(positions.end_time - ts);
+    if (ds <= de) positions.start_time = ts;
+    else positions.end_time = ts;
+    render();
+  });
+
+  // Quick presets
+  document.getElementById('quickPresets').addEventListener('click', function(e) {
+    const btn = e.target.closest('.preset-btn');
+    if (!btn) return;
+    const hours = parseInt(btn.dataset.hours);
+    const now = kstNow();
+
+    // Update window to fit selection
+    windowEnd = now + 1 * 3600000; // 1h after now for visibility
+    windowStart = now - Math.max(hours, 6) * 3600000;
+    windowMs = windowEnd - windowStart;
+
+    positions.end_time = snapMinute(now);
+    positions.start_time = snapMinute(now - hours * 3600000);
+
+    // Clear bench
+    benchVisible = false;
+    positions.bench_start = 0;
+    positions.bench_end = 0;
+    inputs.bench_start.value = '';
+    inputs.bench_end.value = '';
+
+    // Highlight active button
+    document.querySelectorAll('.preset-btn').forEach(b => b.classList.remove('active'));
+    btn.classList.add('active');
+
+    render();
+  });
+
+  // Sync: input change → timeline
+  Object.keys(inputs).forEach(key => {
+    inputs[key].addEventListener('change', function() {
+      const val = this.value;
+      if (!val) {
+        if (key.startsWith('bench')) {
+          positions[key] = 0;
+          if (!positions.bench_start && !positions.bench_end) benchVisible = false;
+        }
+        render();
+        return;
+      }
+      // Parse datetime-local as KST timestamp
+      const parts = val.split('T');
+      const dp = parts[0].split('-');
+      const tp = parts[1].split(':');
+      const ts = Date.UTC(+dp[0], +dp[1]-1, +dp[2], +tp[0], +tp[1] || 0);
+      positions[key] = ts;
+
+      if (key.startsWith('bench') && ts > 0) benchVisible = true;
+
+      // Auto-expand window if needed
+      const allTs = [positions.start_time, positions.end_time,
+                     positions.bench_start, positions.bench_end].filter(t => t > 0);
+      const minTs = Math.min(...allTs);
+      const maxTs = Math.max(...allTs);
+      const margin = 3600000;
+      if (minTs < windowStart + margin || maxTs > windowEnd - margin) {
+        windowStart = minTs - margin * 2;
+        windowEnd = maxTs + margin * 2;
+      }
+
+      render();
+    });
+  });
+
+  // Set initial positions: last 1 hour
+  const now = kstNow();
+  positions.start_time = snapMinute(now - 3600000);
+  positions.end_time = snapMinute(now);
+  render();
+
+  // Expose for loadSample to call
+  window.timelineSync = function() {
+    // Read current input values and sync timeline
+    const allTs = [];
+    Object.keys(inputs).forEach(key => {
+      const val = inputs[key].value;
+      if (!val) { positions[key] = 0; return; }
+      const parts = val.split('T');
+      const dp = parts[0].split('-');
+      const tp = parts[1].split(':');
+      const ts = Date.UTC(+dp[0], +dp[1]-1, +dp[2], +tp[0], +tp[1] || 0);
+      positions[key] = ts;
+      if (ts > 0) allTs.push(ts);
+      if (key.startsWith('bench') && ts > 0) benchVisible = true;
+    });
+    if (!positions.bench_start && !positions.bench_end) benchVisible = false;
+    // Adjust window
+    if (allTs.length >= 2) {
+      const minTs = Math.min(...allTs);
+      const maxTs = Math.max(...allTs);
+      const margin = Math.max((maxTs - minTs) * 0.3, 3600000);
+      windowStart = minTs - margin;
+      windowEnd = maxTs + margin;
+    }
+    render();
+  };
+})();
+
 // --- Load samples ---
 fetch('/api/samples').then(r => r.json()).then(samples => {
   const el = document.getElementById('sampleCards');
@@ -608,6 +987,8 @@ function loadSample(id) {
         el.value = v;
       }
     });
+    // Sync timeline slider with loaded values
+    if (window.timelineSync) window.timelineSync();
   });
 }
 
