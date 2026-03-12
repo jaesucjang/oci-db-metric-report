@@ -24,6 +24,15 @@ from datetime import timedelta
 
 KST_OFFSET = timedelta(hours=9)
 
+
+def utc_to_kst_str(iso_str):
+    """Convert UTC ISO string to KST display string."""
+    if not iso_str:
+        return ""
+    ts = pd.Timestamp(iso_str) + KST_OFFSET
+    return ts.strftime("%Y-%m-%d %H:%M KST")
+
+
 # ============================================================
 # Category definitions
 # ============================================================
@@ -194,7 +203,7 @@ def chart_overview(metrics, categories, meta, output_path):
         ax.xaxis.set_major_locator(mdates.MinuteLocator(interval=5))
 
     axes[-1].set_xlabel("Time (KST, UTC+9)", fontsize=11)
-    period = f"{meta.get('start_time','')} ~ {meta.get('end_time','')}"
+    period = f"{utc_to_kst_str(meta.get('start_time',''))} ~ {utc_to_kst_str(meta.get('end_time',''))}"
     fig.suptitle(f"{title} - Overview ({period})", fontsize=14, fontweight="bold", y=1.01)
     plt.tight_layout()
     plt.savefig(output_path, dpi=150, bbox_inches="tight")

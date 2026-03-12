@@ -79,6 +79,28 @@ COLLECTED=$(jq -r '.collected_at // ""' "$META_FILE")
 PROFILE=$(jq -r '.oci_profile // "DEFAULT"' "$META_FILE")
 INTERVAL_VAL=$(jq -r '.interval // "1m"' "$META_FILE")
 
+# Convert UTC times to KST for display
+utc_to_kst() {
+  local utc_str="$1"
+  [ -z "$utc_str" ] && echo "" && return
+  if command -v python3 &>/dev/null; then
+    python3 -c "
+from datetime import datetime, timedelta
+try:
+    t = datetime.strptime('${utc_str}'.rstrip('Z'), '%Y-%m-%dT%H:%M:%S')
+    kst = t + timedelta(hours=9)
+    print(kst.strftime('%Y-%m-%d %H:%M KST'))
+except: print('${utc_str}')
+"
+  else
+    echo "$utc_str"
+  fi
+}
+START_KST=$(utc_to_kst "$START")
+END_KST=$(utc_to_kst "$END")
+BENCH_S_KST=$(utc_to_kst "$BENCH_S")
+BENCH_E_KST=$(utc_to_kst "$BENCH_E")
+
 REPORT_FILE="${METRICS_DIR}/REPORT.md"
 
 # --- Count metrics ---
@@ -90,7 +112,7 @@ cat > "$REPORT_FILE" <<REPORTEOF
 
 **Generated**: ${COLLECTED}
 **Namespace**: \`${NS}\`
-**Period**: ${START} ~ ${END}
+**Period**: ${START_KST} ~ ${END_KST}
 **Interval**: ${INTERVAL_VAL}
 **OCI Profile**: ${PROFILE}
 
@@ -108,7 +130,7 @@ REPORTEOF
 # Benchmark info
 if [ -n "$BENCH_S" ] && [ "$BENCH_S" != "null" ]; then
   cat >> "$REPORT_FILE" <<BENCHEOF
-| Benchmark window | ${BENCH_S} ~ ${BENCH_E} |
+| Benchmark window | ${BENCH_S_KST} ~ ${BENCH_E_KST} |
 BENCHEOF
 fi
 
