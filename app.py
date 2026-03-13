@@ -608,6 +608,15 @@ def api_sample(sample_id):
     return jsonify(sample["config"])
 
 
+@app.after_request
+def add_no_cache(response):
+    """Prevent browser caching of HTML/JS to ensure latest code runs."""
+    if response.content_type and ("text/html" in response.content_type or "javascript" in response.content_type):
+        response.headers["Cache-Control"] = "no-cache, no-store, must-revalidate"
+        response.headers["Pragma"] = "no-cache"
+    return response
+
+
 if __name__ == "__main__":
     os.makedirs(app.config["OUTPUT_BASE"], exist_ok=True)
     app.run(host="0.0.0.0", port=5050, debug=False)
