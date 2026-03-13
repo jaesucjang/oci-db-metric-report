@@ -363,6 +363,51 @@ def api_download(job_id, filename):
     return send_from_directory(job["metrics_dir"], filename, as_attachment=True)
 
 
+@app.route("/api/jobs/<job_id>", methods=["DELETE"])
+def api_delete_job(job_id):
+    job = jobs.get(job_id)
+    if not job:
+        return jsonify({"error": "Job not found"}), 404
+    # Remove output directory
+    if job.get("metrics_dir") and os.path.isdir(job["metrics_dir"]):
+        import shutil
+        # Remove the parent job dir (job_{id}/)
+        job_dir = os.path.dirname(job["metrics_dir"])
+        if os.path.isdir(job_dir) and "job_" in os.path.basename(job_dir):
+            shutil.rmtree(job_dir, ignore_errors=True)
+    del jobs[job_id]
+    save_jobs()
+    return jsonify({"ok": True})
+
+
+@app.route("/api/pdf/<job_id>")
+def api_pdf(job_id):
+    """Generate PDF from REPORT.md + charts and return it."""
+    job = jobs.get(job_id)
+    if not job or not job.get("metrics_dir"):
+        return jsonify({"error": "Not found"}), 404
+
+    metrics_dir = job["metrics_dir"]
+    report_path = os.path.join(metrics_dir, "REPORT.md")
+    pdf_path = os.path.join(metrics_dir, "REPORT.pdf")
+
+    # Generate PDF using Python
+    try:
+        result = subprocess.run(
+            ["python3", os.path.join(SCRIPT_DIR, "generate_pdf.py"), metrics_dir],
+            capture_output=True, text=True, timeout=60
+        )
+        if result.returncode != 0:
+            return jsonify({"error": f"PDF generation failed: {result.stderr[:300]}"}), 500
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+    if not os.path.isfile(pdf_path):
+        return jsonify({"error": "PDF file not created"}), 500
+
+    return send_from_directory(metrics_dir, "REPORT.pdf", as_attachment=True)
+
+
 @app.route("/api/jobs")
 def api_jobs():
     return jsonify([

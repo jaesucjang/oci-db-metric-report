@@ -1065,7 +1065,9 @@ function showResults(status) {
 
   // Downloads
   const dl = document.getElementById('downloadLinks');
-  dl.innerHTML = [
+  dl.innerHTML = `
+    <button class="btn btn-primary btn-sm" onclick="downloadPdf('${currentJobId}')">PDF Report</button>
+  ` + [
     ['REPORT.md', 'Markdown Report'],
     ['analysis.md', 'Analysis Report'],
     ['stats_summary.csv', 'Stats CSV'],
@@ -1100,16 +1102,46 @@ function loadJobs() {
       const badge = j.status === 'done' ? 'badge-done'
                   : j.status === 'error' ? 'badge-error' : 'badge-running';
       return `
-        <div class="job-item" onclick="window.location='/report/${j.id}'">
+        <div class="job-item">
           <span class="badge ${badge}">${j.status}</span>
-          <div style="flex:1">
+          <div style="flex:1;cursor:pointer;" onclick="window.location='/report/${j.id}'">
             <div style="font-weight:600;font-size:14px">${j.title || j.namespace}</div>
             <div style="font-size:12px;color:var(--text-muted)">${j.created_at}</div>
           </div>
-          <div style="font-size:12px;color:var(--text-muted)">${j.namespace}</div>
+          <div style="font-size:12px;color:var(--text-muted);margin-right:8px;">${j.namespace}</div>
+          <button class="btn btn-outline btn-sm" style="color:var(--danger);border-color:var(--danger);"
+                  onclick="event.stopPropagation();deleteJob('${j.id}')">Delete</button>
         </div>
       `;
     }).join('');
+  });
+}
+
+function deleteJob(id) {
+  if (!confirm('Delete this job and all its output files?')) return;
+  fetch('/api/jobs/' + id, {method:'DELETE'}).then(r => r.json()).then(() => {
+    loadJobs();
+  });
+}
+
+function downloadPdf(jobId) {
+  const btn = event.target;
+  btn.textContent = 'Generating PDF...';
+  btn.disabled = true;
+  fetch('/api/pdf/' + jobId).then(r => {
+    if (!r.ok) return r.json().then(e => { throw new Error(e.error); });
+    return r.blob();
+  }).then(blob => {
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url; a.download = 'REPORT.pdf'; a.click();
+    URL.revokeObjectURL(url);
+    btn.textContent = 'PDF Report';
+    btn.disabled = false;
+  }).catch(err => {
+    alert('PDF generation failed: ' + err.message);
+    btn.textContent = 'PDF Report';
+    btn.disabled = false;
   });
 }
 </script>
