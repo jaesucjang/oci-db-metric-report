@@ -103,6 +103,28 @@ def run_job(job_id, config):
                 oci_profile = "DEFAULT"  # saved config uses DEFAULT section
                 jobs[job_id]["log"] += f"Using saved OCI profile: {profile_id}\n"
                 jobs[job_id]["log"] += f"Config: {saved_config}\n\n"
+            else:
+                jobs[job_id]["status"] = "error"
+                jobs[job_id]["error"] = f"Saved profile '{profile_id}' not found. It may have been deleted."
+                jobs[job_id]["log"] += f"ERROR: Saved profile '{profile_id}' not found!\n"
+                jobs[job_id]["log"] += "The profile config file does not exist. It may have been deleted by another user.\n"
+                jobs[job_id]["log"] += "Please select a different profile or re-register in OCI Settings.\n"
+                return
+
+        # Verify OCI config file exists
+        resolved_config = os.path.expanduser(oci_config_file)
+        if not os.path.isfile(resolved_config):
+            jobs[job_id]["status"] = "error"
+            jobs[job_id]["error"] = f"OCI config file not found: {oci_config_file}"
+            jobs[job_id]["log"] += f"ERROR: OCI config file not found: {resolved_config}\n"
+            jobs[job_id]["log"] += "Run 'oci setup config' or register config in OCI Settings tab.\n"
+            return
+
+        jobs[job_id]["log"] += f"OCI Config: {resolved_config}\n"
+        jobs[job_id]["log"] += f"OCI Profile: {oci_profile}\n"
+        jobs[job_id]["log"] += f"Compartment: {config['compartment_id'][:40]}...\n"
+        jobs[job_id]["log"] += f"Namespace: {config['namespace']}\n"
+        jobs[job_id]["log"] += f"Period: {config['start_time']} ~ {config['end_time']}\n\n"
 
         config_path = os.path.join(out_dir, "config.env")
         with open(config_path, "w") as f:
@@ -129,7 +151,20 @@ def run_job(job_id, config):
         jobs[job_id]["log"] += result.stdout + result.stderr
         if result.returncode != 0:
             jobs[job_id]["status"] = "error"
-            jobs[job_id]["error"] = "Metric collection failed. Check OCI CLI config."
+            # Parse specific error from output
+            output = result.stdout + result.stderr
+            if "authentication failed" in output.lower() or "NotAuthenticated" in output:
+                jobs[job_id]["error"] = "OCI authentication failed. Check API key and config."
+            elif "not found" in output.lower() and "config" in output.lower():
+                jobs[job_id]["error"] = "OCI config or key file not found."
+            elif "NotAuthorizedOrNotFound" in output or "permission" in output.lower():
+                jobs[job_id]["error"] = "Permission denied. Check compartment access rights."
+            elif "No metrics found" in output or "0 metrics available" in output:
+                jobs[job_id]["error"] = "No DB resources found in this compartment/namespace."
+            elif "All metric collections failed" in output:
+                jobs[job_id]["error"] = "All metrics failed. Check OCI CLI errors in log."
+            else:
+                jobs[job_id]["error"] = "Metric collection failed. See log for details."
             return
 
         jobs[job_id]["status"] = "charting"
