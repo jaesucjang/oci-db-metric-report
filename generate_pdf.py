@@ -199,7 +199,7 @@ def generate_pdf(metrics_dir):
                 pdf.ln(2)
             elif stripped:
                 text = stripped.replace("**", "")
-                pdf.multi_cell(0, 6, text)
+                pdf.multi_cell(185, 6, text)
             else:
                 pdf.ln(2)
 
