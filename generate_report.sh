@@ -176,12 +176,24 @@ if [ -f "${METRICS_DIR}/stats_summary.csv" ]; then
   done
 fi
 
+# --- Bottleneck Analysis ---
+if [ -f "${METRICS_DIR}/analysis.md" ]; then
+  cat >> "$REPORT_FILE" <<ANALYSISHDR
+
+---
+
+## 4. Bottleneck Analysis & Recommendations
+
+ANALYSISHDR
+  cat "${METRICS_DIR}/analysis.md" >> "$REPORT_FILE"
+fi
+
 # --- Metric list ---
 cat >> "$REPORT_FILE" <<LISTEOF
 
 ---
 
-## 4. Collected Metrics
+## 5. Collected Metrics
 
 LISTEOF
 
@@ -240,7 +252,7 @@ cat >> "$REPORT_FILE" <<FOOTER
 
 ---
 
-## 5. Reproduction
+## 6. Reproduction
 
 \`\`\`bash
 # 1. Edit config

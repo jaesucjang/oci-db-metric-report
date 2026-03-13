@@ -363,6 +363,331 @@ def main():
               f"{fmt(r['min']):>10} {fmt(r['p95']):>10} {fmt(r['std']):>10}")
     print(f"{'='*80}")
 
+    # --- Generate analysis ---
+    print("\nGenerating bottleneck analysis...")
+    analysis = analyze_metrics(metrics, ns)
+    analysis_path = os.path.join(out, "analysis.md")
+    with open(analysis_path, "w") as f:
+        f.write(analysis)
+    print(f"  Saved: {analysis_path}")
+
+
+# ============================================================
+# Bottleneck Analysis Engine
+# ============================================================
+
+def get_stat(metrics, name):
+    """Get stats for a metric (case-insensitive match)."""
+    for k, s in metrics.items():
+        if k.lower() == name.lower():
+            return {
+                "mean": s.mean(), "max": s.max(), "min": s.min(),
+                "p95": s.quantile(0.95), "std": s.std(), "count": len(s),
+                "series": s,
+            }
+    return None
+
+
+def severity_icon(level):
+    if level == "critical":
+        return "[CRITICAL]"
+    elif level == "warning":
+        return "[WARNING]"
+    elif level == "good":
+        return "[GOOD]"
+    return "[INFO]"
+
+
+def analyze_metrics(metrics, namespace):
+    """Analyze collected metrics and return markdown analysis."""
+    lines = []
+    lines.append("## Bottleneck Analysis & Recommendations\n")
+
+    if not metrics:
+        lines.append("No metrics data available for analysis.\n")
+        return "\n".join(lines)
+
+    findings = []
+    recommendations = []
+
+    is_mysql = "mysql" in namespace.lower()
+
+    # ---- 1. CPU Analysis ----
+    cpu_name = "CPUUtilization" if is_mysql else "CpuUtilization"
+    cpu = get_stat(metrics, cpu_name)
+    if cpu:
+        lines.append("### 1. CPU Utilization\n")
+        lines.append(f"| Metric | Mean | Max | P95 | Std |")
+        lines.append(f"|--------|------|-----|-----|-----|")
+        lines.append(f"| {cpu_name} | {cpu['mean']:.1f}% | {cpu['max']:.1f}% | {cpu['p95']:.1f}% | {cpu['std']:.1f} |")
+        lines.append("")
+
+        if cpu["max"] >= 90:
+            findings.append(f"{severity_icon('critical')} CPU 최대 {cpu['max']:.1f}% — CPU 포화 상태 감지")
+            recommendations.append("- **CPU Scale-up 필요**: OCPU/ECPU 수를 증가시키거나 Shape 업그레이드 검토")
+            recommendations.append("- 슬로우 쿼리 분석: `EXPLAIN`으로 풀스캔 쿼리 최적화")
+            recommendations.append("- 인덱스 최적화: 자주 사용되는 WHERE/JOIN 컬럼에 인덱스 추가")
+        elif cpu["p95"] >= 70:
+            findings.append(f"{severity_icon('warning')} CPU P95 {cpu['p95']:.1f}% — 피크 시간대 부하 높음")
+            recommendations.append("- 피크 시간대 워크로드 분산 또는 Read Replica 활용 검토")
+            recommendations.append("- 쿼리 캐싱 및 커넥션 풀링 최적화")
+        elif cpu["mean"] < 10:
+            findings.append(f"{severity_icon('good')} CPU 평균 {cpu['mean']:.1f}% — 여유 충분 (오버프로비저닝 가능성)")
+            recommendations.append("- Shape 다운사이징으로 비용 절감 가능성 검토")
+        else:
+            findings.append(f"{severity_icon('good')} CPU 평균 {cpu['mean']:.1f}%, 최대 {cpu['max']:.1f}% — 정상 범위")
+        lines.append("")
+
+    # ---- 2. Memory Analysis ----
+    mem = get_stat(metrics, "MemoryUtilization")
+    if mem:
+        lines.append("### 2. Memory Utilization\n")
+        lines.append(f"| Metric | Mean | Max | P95 |")
+        lines.append(f"|--------|------|-----|-----|")
+        lines.append(f"| MemoryUtilization | {mem['mean']:.1f}% | {mem['max']:.1f}% | {mem['p95']:.1f}% |")
+
+        if is_mysql:
+            mem_used = get_stat(metrics, "MemoryUsed")
+            mem_alloc = get_stat(metrics, "MemoryAllocated")
+            if mem_used and mem_alloc:
+                lines.append(f"| MemoryUsed | {fmt(mem_used['mean'])} | {fmt(mem_used['max'])} | {fmt(mem_used['p95'])} |")
+                lines.append(f"| MemoryAllocated | {fmt(mem_alloc['mean'])} | {fmt(mem_alloc['max'])} | - |")
+        lines.append("")
+
+        if mem["max"] >= 95:
+            findings.append(f"{severity_icon('critical')} Memory 최대 {mem['max']:.1f}% — OOM 위험")
+            recommendations.append("- **메모리 증설 필요**: 더 큰 Shape으로 업그레이드")
+            recommendations.append("- Buffer Pool 크기 점검 및 불필요한 세션 정리")
+        elif mem["p95"] >= 80:
+            findings.append(f"{severity_icon('warning')} Memory P95 {mem['p95']:.1f}% — 메모리 압박")
+            recommendations.append("- 메모리 사용 패턴 모니터링 강화")
+            recommendations.append("- 대용량 쿼리의 `sort_buffer_size`, `join_buffer_size` 점검")
+        else:
+            findings.append(f"{severity_icon('good')} Memory 평균 {mem['mean']:.1f}% — 정상 범위")
+        lines.append("")
+
+    # ---- 3. I/O Analysis ----
+    if is_mysql:
+        read_iops = get_stat(metrics, "DbVolumeReadOperations")
+        write_iops = get_stat(metrics, "DbVolumeWriteOperations")
+        read_bytes = get_stat(metrics, "DbVolumeReadBytes")
+        write_bytes = get_stat(metrics, "DbVolumeWriteBytes")
+        vol_util = get_stat(metrics, "DbVolumeUtilization")
+    else:
+        read_iops = get_stat(metrics, "ReadIops")
+        write_iops = get_stat(metrics, "WriteIops")
+        read_bytes = get_stat(metrics, "ReadThroughput")
+        write_bytes = get_stat(metrics, "WriteThroughput")
+        vol_util = None
+
+    if read_iops or write_iops:
+        lines.append("### 3. Disk I/O\n")
+        lines.append(f"| Metric | Mean | Max | P95 |")
+        lines.append(f"|--------|------|-----|-----|")
+        if read_iops:
+            lines.append(f"| Read IOPS | {fmt(read_iops['mean'])} | {fmt(read_iops['max'])} | {fmt(read_iops['p95'])} |")
+        if write_iops:
+            lines.append(f"| Write IOPS | {fmt(write_iops['mean'])} | {fmt(write_iops['max'])} | {fmt(write_iops['p95'])} |")
+        if read_bytes:
+            lines.append(f"| Read Throughput | {fmt(read_bytes['mean'])} B/s | {fmt(read_bytes['max'])} B/s | {fmt(read_bytes['p95'])} B/s |")
+        if write_bytes:
+            lines.append(f"| Write Throughput | {fmt(write_bytes['mean'])} B/s | {fmt(write_bytes['max'])} B/s | {fmt(write_bytes['p95'])} B/s |")
+        if vol_util:
+            lines.append(f"| Volume Utilization | {vol_util['mean']:.1f}% | {vol_util['max']:.1f}% | {vol_util['p95']:.1f}% |")
+        lines.append("")
+
+        # I/O ratio analysis
+        if read_iops and write_iops and read_iops["mean"] > 0:
+            rw_ratio = read_iops["mean"] / max(write_iops["mean"], 0.01)
+            lines.append(f"**Read/Write Ratio**: {rw_ratio:.1f}:1 ({'Read-heavy' if rw_ratio > 3 else 'Write-heavy' if rw_ratio < 0.3 else 'Balanced'})\n")
+
+        total_max_iops = (read_iops["max"] if read_iops else 0) + (write_iops["max"] if write_iops else 0)
+        if total_max_iops > 50000:
+            findings.append(f"{severity_icon('critical')} I/O 최대 {fmt(total_max_iops)} IOPS — 디스크 병목 가능성")
+            recommendations.append("- **스토리지 성능 업그레이드**: Higher Performance 볼륨 또는 Shape 변경")
+            recommendations.append("- 읽기 부하가 높으면 Read Replica 추가")
+        elif total_max_iops > 20000:
+            findings.append(f"{severity_icon('warning')} I/O 최대 {fmt(total_max_iops)} IOPS — 피크 시 디스크 부하 높음")
+            recommendations.append("- 인덱스 최적화로 불필요한 디스크 I/O 감소")
+        else:
+            findings.append(f"{severity_icon('good')} I/O 최대 {fmt(total_max_iops)} IOPS — 정상 범위")
+
+        if vol_util and vol_util["max"] >= 80:
+            findings.append(f"{severity_icon('warning')} Volume Utilization 최대 {vol_util['max']:.1f}% — 디스크 포화 주의")
+            recommendations.append("- 스토리지 확장 또는 오래된 데이터 아카이빙 검토")
+        lines.append("")
+
+    # ---- 4. Connections ----
+    if is_mysql:
+        active_conn = get_stat(metrics, "ActiveConnections")
+        current_conn = get_stat(metrics, "CurrentConnections")
+    else:
+        active_conn = get_stat(metrics, "Connections")
+        current_conn = None
+
+    if active_conn:
+        lines.append("### 4. Connections\n")
+        lines.append(f"| Metric | Mean | Max | P95 |")
+        lines.append(f"|--------|------|-----|-----|")
+        lines.append(f"| Active Connections | {fmt(active_conn['mean'])} | {fmt(active_conn['max'])} | {fmt(active_conn['p95'])} |")
+        if current_conn:
+            lines.append(f"| Current Connections | {fmt(current_conn['mean'])} | {fmt(current_conn['max'])} | {fmt(current_conn['p95'])} |")
+        lines.append("")
+
+        if active_conn["max"] > 500:
+            findings.append(f"{severity_icon('warning')} Active Connection 최대 {active_conn['max']:.0f} — 커넥션 풀 부족 가능성")
+            recommendations.append("- 커넥션 풀링 (ProxySQL, PgBouncer) 도입 검토")
+            recommendations.append("- `max_connections` 파라미터 확인 및 조정")
+        elif active_conn["max"] > 200:
+            findings.append(f"{severity_icon('info')} Active Connection 최대 {active_conn['max']:.0f} — 중간 수준")
+        else:
+            findings.append(f"{severity_icon('good')} Active Connection 최대 {active_conn['max']:.0f} — 정상 범위")
+        lines.append("")
+
+    # ---- 5. Query Performance (MySQL) ----
+    if is_mysql:
+        stmts = get_stat(metrics, "Statements")
+        latency = get_stat(metrics, "StatementLatency")
+        if stmts or latency:
+            lines.append("### 5. Query Performance\n")
+            lines.append(f"| Metric | Mean | Max | P95 |")
+            lines.append(f"|--------|------|-----|-----|")
+            if stmts:
+                lines.append(f"| Statements (cumul.) | {fmt(stmts['mean'])} | {fmt(stmts['max'])} | {fmt(stmts['p95'])} |")
+            if latency:
+                lines.append(f"| Statement Latency (us) | {fmt(latency['mean'])} | {fmt(latency['max'])} | {fmt(latency['p95'])} |")
+            lines.append("")
+
+            if latency and latency["p95"] > 100000:  # > 100ms
+                findings.append(f"{severity_icon('critical')} 쿼리 레이턴시 P95 {fmt(latency['p95'])}us — 슬로우 쿼리 다수 존재")
+                recommendations.append("- Slow Query Log 활성화 후 상위 쿼리 분석")
+                recommendations.append("- `EXPLAIN ANALYZE`로 실행계획 확인")
+                recommendations.append("- 적절한 인덱스 추가 및 쿼리 리팩터링")
+            elif latency and latency["p95"] > 10000:  # > 10ms
+                findings.append(f"{severity_icon('warning')} 쿼리 레이턴시 P95 {fmt(latency['p95'])}us — 개선 여지 있음")
+                recommendations.append("- 쿼리 실행계획 주기적 점검 권장")
+            elif latency:
+                findings.append(f"{severity_icon('good')} 쿼리 레이턴시 P95 {fmt(latency['p95'])}us — 양호")
+            lines.append("")
+
+    # ---- 6. PostgreSQL Safety ----
+    if not is_mysql:
+        deadlocks = get_stat(metrics, "Deadlocks")
+        cache_hit = get_stat(metrics, "BufferCacheHitRatio")
+        read_lat = get_stat(metrics, "ReadLatency")
+        write_lat = get_stat(metrics, "WriteLatency")
+
+        if cache_hit:
+            lines.append("### 5. Buffer Cache\n")
+            lines.append(f"| Metric | Mean | Min | P95 |")
+            lines.append(f"|--------|------|-----|-----|")
+            lines.append(f"| BufferCacheHitRatio | {cache_hit['mean']:.2f}% | {cache_hit['min']:.2f}% | {cache_hit['p95']:.2f}% |")
+            lines.append("")
+            if cache_hit["min"] < 90:
+                findings.append(f"{severity_icon('warning')} Buffer Cache Hit Ratio 최저 {cache_hit['min']:.1f}% — 캐시 미스 빈번")
+                recommendations.append("- `shared_buffers` 증가 검토")
+                recommendations.append("- 워킹셋이 메모리보다 큰 경우 Shape 업그레이드")
+            else:
+                findings.append(f"{severity_icon('good')} Buffer Cache Hit Ratio 최저 {cache_hit['min']:.1f}% — 양호")
+            lines.append("")
+
+        if read_lat or write_lat:
+            lines.append("### 6. Latency\n")
+            lines.append(f"| Metric | Mean | Max | P95 |")
+            lines.append(f"|--------|------|-----|-----|")
+            if read_lat:
+                lines.append(f"| Read Latency (ms) | {read_lat['mean']:.2f} | {read_lat['max']:.2f} | {read_lat['p95']:.2f} |")
+            if write_lat:
+                lines.append(f"| Write Latency (ms) | {write_lat['mean']:.2f} | {write_lat['max']:.2f} | {write_lat['p95']:.2f} |")
+            lines.append("")
+            if write_lat and write_lat["p95"] > 10:
+                findings.append(f"{severity_icon('warning')} Write Latency P95 {write_lat['p95']:.1f}ms — 쓰기 지연")
+                recommendations.append("- WAL 설정 최적화 (`wal_buffers`, `checkpoint_completion_target`)")
+            if read_lat and read_lat["p95"] > 5:
+                findings.append(f"{severity_icon('warning')} Read Latency P95 {read_lat['p95']:.1f}ms — 읽기 지연")
+                recommendations.append("- 캐시 히트율 개선 또는 스토리지 업그레이드")
+            lines.append("")
+
+        if deadlocks and deadlocks["max"] > 0:
+            findings.append(f"{severity_icon('critical')} Deadlock 감지: 최대 {deadlocks['max']:.0f}회")
+            recommendations.append("- 트랜잭션 순서 재설계")
+            recommendations.append("- Lock timeout 및 deadlock 로그 분석")
+
+    # ---- 7. Storage ----
+    if is_mysql:
+        stor_used = get_stat(metrics, "StorageUsed")
+        stor_alloc = get_stat(metrics, "StorageAllocated")
+    else:
+        stor_used = get_stat(metrics, "UsedStorage")
+        stor_alloc = get_stat(metrics, "DataUsedStorage")
+
+    if stor_used:
+        lines.append(f"### {'7' if is_mysql else '7'}. Storage\n")
+        lines.append(f"| Metric | Mean | Max |")
+        lines.append(f"|--------|------|-----|")
+        lines.append(f"| Storage Used | {fmt(stor_used['mean'])} B | {fmt(stor_used['max'])} B |")
+        if stor_alloc:
+            lines.append(f"| Storage Allocated | {fmt(stor_alloc['mean'])} B | {fmt(stor_alloc['max'])} B |")
+            if stor_alloc["mean"] > 0:
+                usage_pct = stor_used["mean"] / stor_alloc["mean"] * 100
+                lines.append(f"\n**Storage Usage**: {usage_pct:.1f}%\n")
+                if usage_pct > 80:
+                    findings.append(f"{severity_icon('warning')} Storage 사용률 {usage_pct:.1f}% — 디스크 공간 부족 주의")
+                    recommendations.append("- 스토리지 확장 또는 데이터 아카이빙/파티셔닝 검토")
+        lines.append("")
+
+    # ---- 8. Network ----
+    net_rx = get_stat(metrics, "NetworkReceiveBytes")
+    net_tx = get_stat(metrics, "NetworkTransmitBytes")
+    if net_rx or net_tx:
+        lines.append("### 8. Network\n")
+        lines.append(f"| Metric | Mean | Max | P95 |")
+        lines.append(f"|--------|------|-----|-----|")
+        if net_rx:
+            lines.append(f"| Network Receive | {fmt(net_rx['mean'])} B/s | {fmt(net_rx['max'])} B/s | {fmt(net_rx['p95'])} B/s |")
+        if net_tx:
+            lines.append(f"| Network Transmit | {fmt(net_tx['mean'])} B/s | {fmt(net_tx['max'])} B/s | {fmt(net_tx['p95'])} B/s |")
+        lines.append("")
+
+    # ========== Summary ==========
+    lines.append("---\n")
+    lines.append("### Findings Summary\n")
+    if findings:
+        for f in findings:
+            lines.append(f"- {f}")
+    else:
+        lines.append("- No significant issues detected.")
+    lines.append("")
+
+    lines.append("### Recommendations\n")
+    if recommendations:
+        seen = set()
+        for r in recommendations:
+            if r not in seen:
+                lines.append(r)
+                seen.add(r)
+    else:
+        lines.append("- Current configuration appears appropriate for the observed workload.")
+    lines.append("")
+
+    # ---- Overall Assessment ----
+    critical_count = sum(1 for f in findings if "[CRITICAL]" in f)
+    warning_count = sum(1 for f in findings if "[WARNING]" in f)
+
+    lines.append("### Overall Assessment\n")
+    if critical_count > 0:
+        lines.append(f"**Status: Attention Required** — {critical_count} critical issue(s) detected.")
+        lines.append("즉각적인 조치가 필요한 병목 지점이 발견되었습니다. 위 권장사항을 우선 검토하세요.")
+    elif warning_count > 0:
+        lines.append(f"**Status: Monitor Closely** — {warning_count} warning(s) detected.")
+        lines.append("현재 운영에 문제는 없으나 피크 시간대에 성능 저하 가능성이 있습니다.")
+    else:
+        lines.append("**Status: Healthy** — No significant issues found.")
+        lines.append("현재 워크로드 대비 리소스 구성이 적절합니다.")
+    lines.append("")
+
+    return "\n".join(lines)
+
 
 if __name__ == "__main__":
     main()
