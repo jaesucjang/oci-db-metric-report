@@ -200,6 +200,19 @@ def api_run():
         if data.get(tf):
             data[tf] = normalize_iso_time(data[tf])
 
+    # Clamp benchmark times within collection range
+    if data.get("bench_start") and data.get("bench_end"):
+        st = data["start_time"]
+        et = data["end_time"]
+        bs = data["bench_start"]
+        be = data["bench_end"]
+        if bs < st:
+            data["bench_start"] = st
+        if be > et:
+            data["bench_end"] = et
+        if data["bench_start"] > data["bench_end"]:
+            data["bench_start"], data["bench_end"] = data["bench_end"], data["bench_start"]
+
     job_id = str(uuid.uuid4())[:8]
     jobs[job_id] = {
         "id": job_id,

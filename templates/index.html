@@ -793,6 +793,12 @@ loadConfigProfiles();
   setInterval(updateNowDisplay, 1000);
 
   function render() {
+    // Auto-clamp bench within collection range
+    if (benchVisible && positions.bench_start && positions.bench_end) {
+      positions.bench_start = clampBench(positions.bench_start);
+      positions.bench_end = clampBench(positions.bench_end);
+    }
+
     // Now marker
     const nowPct = pctOf(kstNow());
     nowLine.style.left = nowPct + '%';
@@ -855,12 +861,22 @@ loadConfigProfiles();
     document.body.style.cursor = 'grabbing';
   }
 
+  function clampBench(ts) {
+    // Constrain benchmark time within the collection range
+    const lo = Math.min(positions.start_time, positions.end_time);
+    const hi = Math.max(positions.start_time, positions.end_time);
+    return Math.max(lo, Math.min(hi, ts));
+  }
+
   function onMove(clientX) {
     if (!dragging) return;
     const rect = track.getBoundingClientRect();
     let pct = (clientX - rect.left) / rect.width * 100;
     pct = Math.max(0, Math.min(100, pct));
-    positions[dragging] = snapMinute(tsOfPct(pct));
+    let ts = snapMinute(tsOfPct(pct));
+    // Bench handles must stay within collection range
+    if (dragging.startsWith('bench')) ts = clampBench(ts);
+    positions[dragging] = ts;
     render();
   }
 
@@ -944,6 +960,12 @@ loadConfigProfiles();
       const dp = parts[0].split('-');
       const tp = parts[1].split(':');
       const ts = Date.UTC(+dp[0], +dp[1]-1, +dp[2], +tp[0], +tp[1] || 0);
+      // Bench times must be within collection range
+      if (key.startsWith('bench') && ts > 0) {
+        const lo = Math.min(positions.start_time, positions.end_time);
+        const hi = Math.max(positions.start_time, positions.end_time);
+        ts = Math.max(lo, Math.min(hi, ts));
+      }
       positions[key] = ts;
 
       if (key.startsWith('bench') && ts > 0) setBenchVisible(true);
