@@ -1109,7 +1109,7 @@ function loadJobs() {
             <div style="font-size:12px;color:var(--text-muted)">${j.created_at}</div>
           </div>
           <div style="font-size:12px;color:var(--text-muted);margin-right:8px;">${j.namespace}</div>
-          ${j.status === 'done' ? `<button class="btn btn-primary btn-sm" onclick="event.stopPropagation();downloadPdf('${j.id}')">PDF</button>` : ''}
+          <button class="btn btn-primary btn-sm" onclick="event.stopPropagation();downloadPdf('${j.id}')" ${j.status !== 'done' ? 'disabled style="opacity:.4"' : ''}>PDF</button>
           <button class="btn btn-outline btn-sm" style="color:var(--danger);border-color:var(--danger);"
                   onclick="event.stopPropagation();deleteJob('${j.id}')">Delete</button>
         </div>
