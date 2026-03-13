@@ -191,10 +191,6 @@
       position: absolute; height: 100%; background: var(--primary); border-radius: 4px;
       opacity: 0.4; pointer-events: none;
     }
-    .timeline-bench {
-      position: absolute; height: 100%; background: #cf222e; border-radius: 4px;
-      opacity: 0.35; pointer-events: none;
-    }
     .timeline-handle {
       width: 18px; height: 18px; border-radius: 50%; background: white;
       border: 2px solid var(--primary); position: absolute; top: 50%; transform: translate(-50%, -50%);
@@ -202,10 +198,6 @@
     }
     .timeline-handle:hover, .timeline-handle.dragging {
       box-shadow: 0 0 0 4px rgba(9,105,218,.2); cursor: grabbing;
-    }
-    .timeline-handle.bench { border-color: #cf222e; }
-    .timeline-handle.bench:hover, .timeline-handle.bench.dragging {
-      box-shadow: 0 0 0 4px rgba(207,34,46,.2);
     }
     .timeline-now {
       position: absolute; top: -4px; width: 2px; height: 16px; background: var(--success);
@@ -224,20 +216,6 @@
     .timeline-handle:hover .handle-tooltip, .timeline-handle.dragging .handle-tooltip { opacity: 1; }
     .timeline-legend { display: flex; gap: 16px; margin-top: 8px; font-size: 11px; color: var(--text-muted); flex-wrap: wrap; }
     .legend-dot { display: inline-block; width: 10px; height: 10px; border-radius: 50%; margin-right: 4px; vertical-align: middle; }
-
-    /* Toggle switch */
-    .toggle-switch { position: relative; display: inline-block; width: 38px; height: 20px; flex-shrink: 0; }
-    .toggle-switch input { opacity: 0; width: 0; height: 0; }
-    .toggle-slider {
-      position: absolute; cursor: pointer; top: 0; left: 0; right: 0; bottom: 0;
-      background: #ccc; border-radius: 20px; transition: .3s;
-    }
-    .toggle-slider:before {
-      position: absolute; content: ""; height: 14px; width: 14px; left: 3px; bottom: 3px;
-      background: white; border-radius: 50%; transition: .3s;
-    }
-    .toggle-switch input:checked + .toggle-slider { background: #cf222e; }
-    .toggle-switch input:checked + .toggle-slider:before { transform: translateX(18px); }
 
     @media (max-width: 768px) {
       .form-grid { grid-template-columns: 1fr; }
@@ -332,35 +310,19 @@
             <div class="timeline-container" id="timelineContainer">
               <div class="timeline-track" id="timelineTrack">
                 <div class="timeline-range" id="timelineRange"></div>
-                <div class="timeline-bench" id="timelineBench"></div>
                 <div class="timeline-now" id="timelineNow" title="현재 시각"></div>
               </div>
-              <!-- Handles: start, end, bench_start, bench_end -->
               <div class="timeline-handle" id="handleStart" data-field="start_time">
                 <div class="handle-tooltip" id="tipStart"></div>
               </div>
               <div class="timeline-handle" id="handleEnd" data-field="end_time">
                 <div class="handle-tooltip" id="tipEnd"></div>
               </div>
-              <div class="timeline-handle bench" id="handleBenchStart" data-field="bench_start" style="display:none">
-                <div class="handle-tooltip" id="tipBenchStart"></div>
-              </div>
-              <div class="timeline-handle bench" id="handleBenchEnd" data-field="bench_end" style="display:none">
-                <div class="handle-tooltip" id="tipBenchEnd"></div>
-              </div>
               <div class="timeline-labels" id="timelineLabels"></div>
             </div>
             <div class="timeline-legend">
-              <span><span class="legend-dot" style="background:var(--primary);opacity:.5"></span>수집 구간 (파란 핸들)</span>
-              <span><span class="legend-dot" style="background:#cf222e;opacity:.5"></span>벤치마크 구간 (빨간 핸들)</span>
+              <span><span class="legend-dot" style="background:var(--primary);opacity:.5"></span>수집 구간</span>
               <span><span class="legend-dot" style="background:var(--success)"></span>현재 시각</span>
-            </div>
-            <div style="margin-top:10px;display:flex;align-items:center;gap:8px;">
-              <label class="toggle-switch">
-                <input type="checkbox" id="benchToggle">
-                <span class="toggle-slider"></span>
-              </label>
-              <span style="font-size:13px;font-weight:500;color:var(--text-muted)">벤치마크 구간 하이라이트 사용</span>
             </div>
           </div>
 
@@ -374,16 +336,6 @@
             <label>End Time (KST) <span class="required">*</span></label>
             <input type="datetime-local" name="end_time" id="inputEndTime" required>
             <span class="hint">타임라인 드래그 또는 직접 입력</span>
-          </div>
-          <div class="form-group" id="benchStartGroup" style="display:none">
-            <label>Benchmark Start (KST)</label>
-            <input type="datetime-local" name="bench_start" id="inputBenchStart">
-            <span class="hint">빨간 핸들 드래그 또는 직접 입력</span>
-          </div>
-          <div class="form-group" id="benchEndGroup" style="display:none">
-            <label>Benchmark End (KST)</label>
-            <input type="datetime-local" name="bench_end" id="inputBenchEnd">
-            <span class="hint">빨간 핸들 드래그 또는 직접 입력</span>
           </div>
           <div class="form-group full">
             <label>Report Title</label>
@@ -706,20 +658,14 @@ loadConfigProfiles();
   const handles = {
     start_time:  document.getElementById('handleStart'),
     end_time:    document.getElementById('handleEnd'),
-    bench_start: document.getElementById('handleBenchStart'),
-    bench_end:   document.getElementById('handleBenchEnd'),
   };
   const tips = {
     start_time:  document.getElementById('tipStart'),
     end_time:    document.getElementById('tipEnd'),
-    bench_start: document.getElementById('tipBenchStart'),
-    bench_end:   document.getElementById('tipBenchEnd'),
   };
   const inputs = {
     start_time:  document.getElementById('inputStartTime'),
     end_time:    document.getElementById('inputEndTime'),
-    bench_start: document.getElementById('inputBenchStart'),
-    bench_end:   document.getElementById('inputBenchEnd'),
   };
 
   // Timeline window: default 24h ending now (KST)
@@ -728,33 +674,7 @@ loadConfigProfiles();
   let windowStart = windowEnd - windowMs;
 
   // Handle positions as timestamps (KST epoch-like)
-  let positions = { start_time: 0, end_time: 0, bench_start: 0, bench_end: 0 };
-  let benchVisible = false;
-  const benchToggle = document.getElementById('benchToggle');
-  const benchStartGroup = document.getElementById('benchStartGroup');
-  const benchEndGroup = document.getElementById('benchEndGroup');
-
-  function setBenchVisible(on) {
-    benchVisible = on;
-    benchToggle.checked = on;
-    benchStartGroup.style.display = on ? '' : 'none';
-    benchEndGroup.style.display = on ? '' : 'none';
-    if (on && !positions.bench_start && !positions.bench_end && positions.start_time && positions.end_time) {
-      // Default: bench in the middle third of the range
-      const rangeLen = positions.end_time - positions.start_time;
-      positions.bench_start = snapMinute(positions.start_time + rangeLen * 0.33);
-      positions.bench_end = snapMinute(positions.start_time + rangeLen * 0.66);
-    }
-    if (!on) {
-      positions.bench_start = 0;
-      positions.bench_end = 0;
-      inputs.bench_start.value = '';
-      inputs.bench_end.value = '';
-    }
-    render();
-  }
-
-  benchToggle.addEventListener('change', function() { setBenchVisible(this.checked); });
+  let positions = { start_time: 0, end_time: 0 };
 
   function kstNow() { return Date.now() + 9 * 3600000; }
 
@@ -793,12 +713,6 @@ loadConfigProfiles();
   setInterval(updateNowDisplay, 1000);
 
   function render() {
-    // Auto-clamp bench within collection range
-    if (benchVisible && positions.bench_start && positions.bench_end) {
-      positions.bench_start = clampBench(positions.bench_start);
-      positions.bench_end = clampBench(positions.bench_end);
-    }
-
     // Now marker
     const nowPct = pctOf(kstNow());
     nowLine.style.left = nowPct + '%';
@@ -815,32 +729,9 @@ loadConfigProfiles();
     tips.start_time.textContent = formatKST(positions.start_time);
     tips.end_time.textContent = formatKST(positions.end_time);
 
-    // Bench range
-    if (benchVisible && positions.bench_start && positions.bench_end) {
-      const bsp = pctOf(positions.bench_start);
-      const bep = pctOf(positions.bench_end);
-      benchEl.style.left = Math.min(bsp, bep) + '%';
-      benchEl.style.width = Math.abs(bep - bsp) + '%';
-      benchEl.style.display = 'block';
-      handles.bench_start.style.left = bsp + '%';
-      handles.bench_end.style.left = bep + '%';
-      handles.bench_start.style.display = 'block';
-      handles.bench_end.style.display = 'block';
-      tips.bench_start.textContent = 'B:' + formatKST(positions.bench_start);
-      tips.bench_end.textContent = 'B:' + formatKST(positions.bench_end);
-    } else {
-      benchEl.style.display = 'none';
-      handles.bench_start.style.display = 'none';
-      handles.bench_end.style.display = 'none';
-    }
-
     // Sync to form inputs
     inputs.start_time.value = formatKSTFull(positions.start_time);
     inputs.end_time.value = formatKSTFull(positions.end_time);
-    if (benchVisible && positions.bench_start) {
-      inputs.bench_start.value = formatKSTFull(positions.bench_start);
-      inputs.bench_end.value = formatKSTFull(positions.bench_end);
-    }
 
     // Timeline hour labels
     const steps = 6;
@@ -861,22 +752,12 @@ loadConfigProfiles();
     document.body.style.cursor = 'grabbing';
   }
 
-  function clampBench(ts) {
-    // Constrain benchmark time within the collection range
-    const lo = Math.min(positions.start_time, positions.end_time);
-    const hi = Math.max(positions.start_time, positions.end_time);
-    return Math.max(lo, Math.min(hi, ts));
-  }
-
   function onMove(clientX) {
     if (!dragging) return;
     const rect = track.getBoundingClientRect();
     let pct = (clientX - rect.left) / rect.width * 100;
     pct = Math.max(0, Math.min(100, pct));
-    let ts = snapMinute(tsOfPct(pct));
-    // Bench handles must stay within collection range
-    if (dragging.startsWith('bench')) ts = clampBench(ts);
-    positions[dragging] = ts;
+    positions[dragging] = snapMinute(tsOfPct(pct));
     render();
   }
 
@@ -932,13 +813,6 @@ loadConfigProfiles();
     positions.end_time = snapMinute(now);
     positions.start_time = snapMinute(now - hours * 3600000);
 
-    // Reset bench positions but keep toggle state
-    if (benchVisible) {
-      const rangeLen = hours * 3600000;
-      positions.bench_start = snapMinute(positions.start_time + rangeLen * 0.33);
-      positions.bench_end = snapMinute(positions.start_time + rangeLen * 0.66);
-    }
-
     // Highlight active button
     document.querySelectorAll('.preset-btn').forEach(b => b.classList.remove('active'));
     btn.classList.add('active');
@@ -950,29 +824,16 @@ loadConfigProfiles();
   Object.keys(inputs).forEach(key => {
     inputs[key].addEventListener('change', function() {
       const val = this.value;
-      if (!val) {
-        if (key.startsWith('bench')) positions[key] = 0;
-        render();
-        return;
-      }
+      if (!val) { render(); return; }
       // Parse datetime-local as KST timestamp
       const parts = val.split('T');
       const dp = parts[0].split('-');
       const tp = parts[1].split(':');
       const ts = Date.UTC(+dp[0], +dp[1]-1, +dp[2], +tp[0], +tp[1] || 0);
-      // Bench times must be within collection range
-      if (key.startsWith('bench') && ts > 0) {
-        const lo = Math.min(positions.start_time, positions.end_time);
-        const hi = Math.max(positions.start_time, positions.end_time);
-        ts = Math.max(lo, Math.min(hi, ts));
-      }
       positions[key] = ts;
 
-      if (key.startsWith('bench') && ts > 0) setBenchVisible(true);
-
       // Auto-expand window if needed
-      const allTs = [positions.start_time, positions.end_time,
-                     positions.bench_start, positions.bench_end].filter(t => t > 0);
+      const allTs = [positions.start_time, positions.end_time].filter(t => t > 0);
       const minTs = Math.min(...allTs);
       const maxTs = Math.max(...allTs);
       const margin = 3600000;
@@ -995,7 +856,6 @@ loadConfigProfiles();
   window.timelineSync = function() {
     // Read current input values and sync timeline
     const allTs = [];
-    let hasBench = false;
     Object.keys(inputs).forEach(key => {
       const val = inputs[key].value;
       if (!val) { positions[key] = 0; return; }
@@ -1005,9 +865,7 @@ loadConfigProfiles();
       const ts = Date.UTC(+dp[0], +dp[1]-1, +dp[2], +tp[0], +tp[1] || 0);
       positions[key] = ts;
       if (ts > 0) allTs.push(ts);
-      if (key.startsWith('bench') && ts > 0) hasBench = true;
     });
-    setBenchVisible(hasBench);
     // Adjust window
     if (allTs.length >= 2) {
       const minTs = Math.min(...allTs);
