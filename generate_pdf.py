@@ -1,7 +1,8 @@
 #!/usr/bin/env python3
 """
 Generate PDF report from metrics directory.
-Uses fpdf2 with Unicode font (Noto Sans KR) for Korean support.
+Uses fpdf2 with Noto Sans KR for Korean support.
+All pages portrait A4, consistent margins.
 """
 
 import json
@@ -10,14 +11,17 @@ import sys
 import urllib.request
 from datetime import timedelta
 
-
 FONT_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "fonts")
 FONT_URL = "https://github.com/google/fonts/raw/main/ofl/notosanskr/NotoSansKR%5Bwght%5D.ttf"
 FONT_FILE = os.path.join(FONT_DIR, "NotoSansKR.ttf")
 
+# Layout constants (A4 portrait: 210 x 297 mm)
+MARGIN = 20
+PAGE_W = 210
+CONTENT_W = PAGE_W - MARGIN * 2  # 170mm usable
+
 
 def ensure_font():
-    """Download Noto Sans KR if not present."""
     if os.path.isfile(FONT_FILE):
         return
     os.makedirs(FONT_DIR, exist_ok=True)
@@ -27,12 +31,11 @@ def ensure_font():
 
 
 def generate_pdf(metrics_dir):
-    """Generate REPORT.pdf from metrics data, charts, and analysis."""
     pdf_path = os.path.join(metrics_dir, "REPORT.pdf")
 
     # Read metadata
-    meta_path = os.path.join(metrics_dir, "_metadata.json")
     meta = {}
+    meta_path = os.path.join(metrics_dir, "_metadata.json")
     if os.path.isfile(meta_path):
         with open(meta_path) as f:
             meta = json.load(f)
@@ -56,7 +59,7 @@ def generate_pdf(metrics_dir):
     for name in ["chart_overview.png", "chart_detail.png", "chart_zoom.png"]:
         p = os.path.join(metrics_dir, name)
         if os.path.isfile(p):
-            charts.append((name.replace("chart_", "").replace(".png", "").title(), p))
+            charts.append((name.replace("chart_", "").replace(".png", "").replace("_", " ").title(), p))
 
     try:
         from fpdf import FPDF
@@ -81,137 +84,232 @@ def generate_pdf(metrics_dir):
             return iso_str
 
     pdf = FPDF()
-    pdf.set_auto_page_break(auto=True, margin=15)
+    pdf.set_margins(MARGIN, MARGIN, MARGIN)
+    pdf.set_auto_page_break(auto=True, margin=20)
 
     # Register Unicode font
     pdf.add_font("NotoKR", "", FONT_FILE)
     pdf.add_font("NotoKR", "B", FONT_FILE)
     pdf.add_font("NotoKR", "I", FONT_FILE)
 
-    def set_font(style="", size=10):
+    def font(style="", size=10):
         pdf.set_font("NotoKR", style, size)
 
-    # --- Title page ---
-    pdf.add_page()
-    set_font("B", 22)
-    pdf.ln(30)
-    title = meta.get("report_title", "OCI DB Metric Report")
-    pdf.cell(0, 15, title, new_x="LMARGIN", new_y="NEXT", align="C")
-    pdf.ln(10)
+    def heading(text, size=14):
+        pdf.ln(6)
+        font("B", size)
+        pdf.cell(CONTENT_W, 10, text, new_x="LMARGIN", new_y="NEXT")
+        pdf.set_draw_color(60, 60, 60)
+        pdf.line(MARGIN, pdf.get_y(), PAGE_W - MARGIN, pdf.get_y())
+        pdf.ln(4)
 
-    set_font("", 11)
+    def subheading(text, size=11):
+        pdf.ln(4)
+        font("B", size)
+        pdf.cell(CONTENT_W, 8, text, new_x="LMARGIN", new_y="NEXT")
+        pdf.ln(2)
+
+    def body(text):
+        font("", 9)
+        pdf.multi_cell(CONTENT_W, 5.5, text)
+
+    def bullet(text):
+        font("", 9)
+        x = pdf.get_x()
+        pdf.cell(8, 5.5, "  \u2022")
+        pdf.multi_cell(CONTENT_W - 8, 5.5, text)
+
+    def separator():
+        pdf.ln(3)
+        pdf.set_draw_color(200, 200, 200)
+        pdf.line(MARGIN, pdf.get_y(), PAGE_W - MARGIN, pdf.get_y())
+        pdf.ln(3)
+
+    # ================================================================
+    # 1. Title Page
+    # ================================================================
+    pdf.add_page()
+    pdf.ln(50)
+    font("B", 24)
+    title = meta.get("report_title", "OCI DB Metric Report")
+    pdf.cell(CONTENT_W, 14, title, new_x="LMARGIN", new_y="NEXT", align="C")
+    pdf.ln(6)
+
+    separator()
+    pdf.ln(8)
+
+    font("", 11)
     ns = meta.get("namespace", "")
     start_kst = utc_to_kst(meta.get("start_time", ""))
     end_kst = utc_to_kst(meta.get("end_time", ""))
     collected = meta.get("collected_at", "")
-    interval = meta.get("interval", "1m")
+    interval_val = meta.get("interval", "1m")
     profile = meta.get("oci_profile", "DEFAULT")
 
-    info_lines = [
-        f"Namespace: {ns}",
-        f"Period: {start_kst} ~ {end_kst}",
-        f"Interval: {interval}",
-        f"OCI Profile: {profile}",
-        f"Generated: {collected}",
+    # Info table (key-value, centered)
+    info = [
+        ("Namespace", ns),
+        ("Period", f"{start_kst}  ~  {end_kst}"),
+        ("Interval", interval_val),
+        ("OCI Profile", profile),
+        ("Generated", collected),
     ]
-    for line in info_lines:
-        pdf.cell(0, 8, line, new_x="LMARGIN", new_y="NEXT", align="C")
+    for label, val in info:
+        font("B", 10)
+        pdf.cell(40, 8, label, align="R")
+        font("", 10)
+        pdf.cell(5, 8, ":")
+        pdf.cell(CONTENT_W - 45, 8, f"  {val}", new_x="LMARGIN", new_y="NEXT")
 
-    pdf.ln(10)
-    pdf.set_draw_color(200, 200, 200)
-    pdf.line(20, pdf.get_y(), 190, pdf.get_y())
-
-    # --- Charts ---
+    # ================================================================
+    # 2. Charts (portrait, fit to content width)
+    # ================================================================
     for label, img_path in charts:
-        pdf.add_page("L")  # Landscape for charts
-        set_font("B", 13)
-        pdf.cell(0, 10, f"Chart: {label}", new_x="LMARGIN", new_y="NEXT")
-        pdf.ln(2)
+        pdf.add_page()
+        heading(f"Chart: {label}", 13)
         try:
-            img_w = 267  # landscape A4 width minus margins
-            pdf.image(img_path, x=15, w=img_w)
+            pdf.image(img_path, x=MARGIN, w=CONTENT_W)
         except Exception as e:
-            set_font("", 10)
-            pdf.cell(0, 8, f"(Image load error: {e})", new_x="LMARGIN", new_y="NEXT")
+            font("", 9)
+            pdf.cell(CONTENT_W, 8, f"(Image error: {e})", new_x="LMARGIN", new_y="NEXT")
 
-    # --- Stats table ---
+    # ================================================================
+    # 3. Statistics Summary
+    # ================================================================
     if len(stats_lines) > 1:
         pdf.add_page()
-        set_font("B", 14)
-        pdf.cell(0, 10, "Statistics Summary", new_x="LMARGIN", new_y="NEXT")
-        pdf.ln(4)
+        heading("Statistics Summary")
 
         headers = stats_lines[0].split(",")
-        col_widths = [50, 25, 25, 25, 25, 25, 15]
-        if len(col_widths) < len(headers):
-            col_widths = [190 // len(headers)] * len(headers)
+        n_cols = len(headers)
+        # Proportional widths: first col wider for metric name
+        first_w = 52
+        rest_w = (CONTENT_W - first_w) / max(n_cols - 1, 1)
+        col_w = [first_w] + [rest_w] * (n_cols - 1)
 
-        set_font("B", 8)
-        pdf.set_fill_color(240, 240, 240)
+        # Header row
+        font("B", 8)
+        pdf.set_fill_color(45, 55, 72)
+        pdf.set_text_color(255, 255, 255)
         for i, h in enumerate(headers):
-            w = col_widths[i] if i < len(col_widths) else 25
+            w = col_w[i] if i < len(col_w) else rest_w
             pdf.cell(w, 7, h, border=1, fill=True, align="C")
         pdf.ln()
+        pdf.set_text_color(0, 0, 0)
 
-        set_font("", 7)
-        for row_line in stats_lines[1:]:
+        # Data rows (alternating bg)
+        font("", 7.5)
+        for row_idx, row_line in enumerate(stats_lines[1:]):
             cols = row_line.split(",")
+            if row_idx % 2 == 1:
+                pdf.set_fill_color(245, 247, 250)
+                fill = True
+            else:
+                fill = False
             for i, val in enumerate(cols):
-                w = col_widths[i] if i < len(col_widths) else 25
-                pdf.cell(w, 6, val, border=1, align="C" if i > 0 else "L")
+                w = col_w[i] if i < len(col_w) else rest_w
+                pdf.cell(w, 6, val, border=1, fill=fill, align="C" if i > 0 else "L")
             pdf.ln()
 
-    # --- Analysis ---
+    # ================================================================
+    # 4. Bottleneck Analysis & Recommendations
+    # ================================================================
     if analysis:
         pdf.add_page()
-        set_font("B", 14)
-        pdf.cell(0, 10, "Bottleneck Analysis & Recommendations", new_x="LMARGIN", new_y="NEXT")
-        pdf.ln(4)
+        heading("Bottleneck Analysis & Recommendations")
 
-        set_font("", 9)
+        # Track if we're inside a table
+        in_table = False
+        table_rows = []
+
         for line in analysis.split("\n"):
             stripped = line.strip()
+
+            # Flush table if line is not a table row
+            if not stripped.startswith("|") and table_rows:
+                _render_table(pdf, table_rows, CONTENT_W, MARGIN)
+                table_rows = []
+                in_table = False
+
             if stripped.startswith("### "):
-                pdf.ln(4)
-                set_font("B", 11)
-                pdf.cell(0, 7, stripped.replace("### ", ""), new_x="LMARGIN", new_y="NEXT")
-                set_font("", 9)
+                subheading(stripped.replace("### ", ""))
             elif stripped.startswith("## "):
-                pdf.ln(6)
-                set_font("B", 13)
-                pdf.cell(0, 8, stripped.replace("## ", ""), new_x="LMARGIN", new_y="NEXT")
-                set_font("", 9)
-            elif stripped.startswith("|") and "---" not in stripped:
-                cells = [c.strip() for c in stripped.split("|")[1:-1]]
-                if cells:
-                    cell_w = 190 // max(len(cells), 1)
-                    for c in cells:
-                        text = c.replace("**", "")
-                        pdf.cell(cell_w, 6, text, border=1, align="C")
-                    pdf.ln()
+                heading(stripped.replace("## ", ""), 13)
+            elif stripped.startswith("|"):
+                if "---" in stripped:
+                    continue  # skip separator row
+                table_rows.append(stripped)
             elif stripped.startswith("- "):
                 text = stripped[2:].replace("**", "")
-                pdf.cell(5, 6, "")
-                pdf.multi_cell(180, 6, f"  * {text}")
+                bullet(text)
             elif stripped.startswith("---"):
-                pdf.ln(2)
-                pdf.line(20, pdf.get_y(), 190, pdf.get_y())
-                pdf.ln(2)
+                separator()
             elif stripped:
                 text = stripped.replace("**", "")
-                pdf.multi_cell(185, 6, text)
+                body(text)
+                pdf.ln(1)
             else:
-                pdf.ln(2)
+                pdf.ln(3)
 
-    # --- Footer ---
-    pdf.add_page()
-    set_font("I", 10)
-    pdf.ln(20)
-    pdf.cell(0, 8, "Generated by oci-db-metric-report", new_x="LMARGIN", new_y="NEXT", align="C")
-    pdf.cell(0, 8, "https://github.com/jaesucjang/oci-db-metric-report", new_x="LMARGIN", new_y="NEXT", align="C")
+        # Flush remaining table
+        if table_rows:
+            _render_table(pdf, table_rows, CONTENT_W, MARGIN)
+
+    # ================================================================
+    # Footer
+    # ================================================================
+    pdf.ln(15)
+    separator()
+    font("I", 9)
+    pdf.set_text_color(120, 120, 120)
+    pdf.cell(CONTENT_W, 7, "Generated by oci-db-metric-report", new_x="LMARGIN", new_y="NEXT", align="C")
+    pdf.cell(CONTENT_W, 7, "https://github.com/jaesucjang/oci-db-metric-report", new_x="LMARGIN", new_y="NEXT", align="C")
+    pdf.set_text_color(0, 0, 0)
 
     pdf.output(pdf_path)
     print(f"PDF saved: {pdf_path}")
+
+
+def _render_table(pdf, rows, content_w, margin):
+    """Render markdown table rows as a formatted PDF table."""
+    if not rows:
+        return
+
+    parsed = []
+    for r in rows:
+        cells = [c.strip().replace("**", "") for c in r.split("|")[1:-1]]
+        parsed.append(cells)
+
+    if not parsed:
+        return
+
+    n_cols = max(len(r) for r in parsed)
+    if n_cols == 0:
+        return
+
+    # Column widths: first col wider
+    first_w = min(content_w * 0.35, 60)
+    rest_w = (content_w - first_w) / max(n_cols - 1, 1)
+    col_w = [first_w] + [rest_w] * (n_cols - 1)
+
+    for row_idx, cells in enumerate(parsed):
+        if row_idx == 0:
+            # Header
+            pdf.set_font("NotoKR", "B", 8)
+            pdf.set_fill_color(240, 240, 240)
+            for i, c in enumerate(cells):
+                w = col_w[i] if i < len(col_w) else rest_w
+                pdf.cell(w, 6.5, c, border=1, fill=True, align="C")
+            pdf.ln()
+        else:
+            # Data
+            pdf.set_font("NotoKR", "", 8)
+            for i, c in enumerate(cells):
+                w = col_w[i] if i < len(col_w) else rest_w
+                pdf.cell(w, 6, c, border=1, align="C" if i > 0 else "L")
+            pdf.ln()
+
+    pdf.ln(2)
 
 
 if __name__ == "__main__":
