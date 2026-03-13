@@ -158,10 +158,11 @@ def load_metrics(metrics_dir):
         if os.path.getsize(f) == 0:
             continue
         name = os.path.basename(f).replace(".csv", "")
-        if name.startswith("_"):
+        if name.startswith("_") or name.startswith("stats"):
             continue
-        df = pd.read_csv(f, names=["timestamp", "value"], parse_dates=["timestamp"])
+        df = pd.read_csv(f, names=["timestamp", "value"])
         if not df.empty:
+            df["timestamp"] = pd.to_datetime(df["timestamp"], utc=True)
             df["timestamp"] = df["timestamp"] + KST_OFFSET  # Convert UTC → KST
             metrics[name] = df.set_index("timestamp").sort_index()["value"]
     return metrics
