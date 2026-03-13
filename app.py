@@ -76,8 +76,34 @@ app.config["MAX_CONTENT_LENGTH"] = 16 * 1024 * 1024
 
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 
-# In-memory job tracker
+# Persistent job tracker
+JOBS_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "output", "jobs.json")
 jobs = {}
+
+
+def load_jobs():
+    """Load jobs from disk on startup."""
+    global jobs
+    if os.path.isfile(JOBS_FILE):
+        try:
+            with open(JOBS_FILE) as f:
+                jobs = json.load(f)
+        except Exception:
+            jobs = {}
+
+
+def save_jobs():
+    """Persist jobs to disk (excludes log to keep file small)."""
+    try:
+        os.makedirs(os.path.dirname(JOBS_FILE), exist_ok=True)
+        data = {}
+        for jid, j in jobs.items():
+            data[jid] = {k: v for k, v in j.items() if k != "log"}
+            data[jid]["log"] = ""  # don't persist full logs
+        with open(JOBS_FILE, "w") as f:
+            json.dump(data, f, default=str)
+    except Exception:
+        pass
 
 
 def run_job(job_id, config):
@@ -211,6 +237,8 @@ def run_job(job_id, config):
     except Exception as e:
         jobs[job_id]["status"] = "error"
         jobs[job_id]["error"] = str(e)
+    finally:
+        save_jobs()
 
 
 # ============================================================
@@ -679,4 +707,5 @@ def add_no_cache(response):
 
 if __name__ == "__main__":
     os.makedirs(app.config["OUTPUT_BASE"], exist_ok=True)
+    load_jobs()
     app.run(host="0.0.0.0", port=5050, debug=False)
