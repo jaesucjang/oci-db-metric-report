@@ -115,9 +115,10 @@ def generate_pdf(metrics_dir):
 
     def bullet(text):
         font("", 9)
-        x = pdf.get_x()
+        pdf.set_x(MARGIN)
         pdf.cell(8, 5.5, "  \u2022")
-        pdf.multi_cell(CONTENT_W - 8, 5.5, text)
+        pdf.multi_cell(CONTENT_W - 10, 5.5, text)
+        pdf.set_x(MARGIN)
 
     def separator():
         pdf.ln(3)
