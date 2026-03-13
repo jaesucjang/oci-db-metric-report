@@ -386,6 +386,10 @@
           </table>
         </div>
       </div>
+      <div class="card" id="analysisCard" style="display:none;">
+        <h3>Bottleneck Analysis & Recommendations</h3>
+        <div id="analysisContent" style="font-size:14px;line-height:1.7;white-space:pre-wrap;font-family:inherit;"></div>
+      </div>
       <div class="card">
         <h3>Downloads</h3>
         <div class="actions" id="downloadLinks"></div>
@@ -998,6 +1002,19 @@ function toggleLog() {
   document.getElementById('logBox').classList.toggle('show');
 }
 
+// --- Simple markdown to HTML ---
+function markdownToHtml(md) {
+  return md
+    .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+    .replace(/^### (.+)$/gm, '<h4 style="margin:16px 0 8px;font-size:15px;color:var(--text);">$1</h4>')
+    .replace(/^## (.+)$/gm, '<h3 style="margin:20px 0 10px;font-size:17px;color:var(--text);border-bottom:1px solid var(--border);padding-bottom:6px;">$1</h3>')
+    .replace(/^\- (.+)$/gm, '<div style="margin:3px 0 3px 16px;">• $1</div>')
+    .replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>')
+    .replace(/^---$/gm, '<hr style="margin:16px 0;border:none;border-top:1px solid var(--border);">')
+    .replace(/\n\n/g, '<br><br>')
+    .replace(/\n/g, '\n');
+}
+
 // --- Show results ---
 function showResults(status) {
   const results = document.getElementById('resultsArea');
@@ -1034,10 +1051,23 @@ function showResults(status) {
     `).join('');
   }
 
+  // Analysis
+  fetch('/api/analysis/' + currentJobId).then(r => r.json()).then(res => {
+    const card = document.getElementById('analysisCard');
+    const content = document.getElementById('analysisContent');
+    if (res.content) {
+      content.innerHTML = markdownToHtml(res.content);
+      card.style.display = '';
+    } else {
+      card.style.display = 'none';
+    }
+  });
+
   // Downloads
   const dl = document.getElementById('downloadLinks');
   dl.innerHTML = [
     ['REPORT.md', 'Markdown Report'],
+    ['analysis.md', 'Analysis Report'],
     ['stats_summary.csv', 'Stats CSV'],
     ['chart_overview.png', 'Overview Chart'],
     ['chart_detail.png', 'Detail Chart'],

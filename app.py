@@ -315,6 +315,18 @@ def api_report(job_id):
         return jsonify({"markdown": f.read()})
 
 
+@app.route("/api/analysis/<job_id>")
+def api_analysis(job_id):
+    job = jobs.get(job_id)
+    if not job or not job["metrics_dir"]:
+        return jsonify({"error": "Not found"}), 404
+    analysis_path = os.path.join(job["metrics_dir"], "analysis.md")
+    if not os.path.exists(analysis_path):
+        return jsonify({"content": ""})
+    with open(analysis_path) as f:
+        return jsonify({"content": f.read()})
+
+
 @app.route("/api/download/<job_id>/<filename>")
 def api_download(job_id, filename):
     job = jobs.get(job_id)
