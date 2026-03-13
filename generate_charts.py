@@ -80,38 +80,48 @@ MYSQL_CATEGORIES = {
 }
 
 PG_CATEGORIES = {
-    "Performance (%)": {
-        "metrics": ["CpuUtilization", "MemoryUtilization", "BufferCacheHitRatio"],
+    "Performance (%) - PRIMARY": {
+        "metrics": ["PRIMARY_CpuUtilization", "PRIMARY_MemoryUtilization", "PRIMARY_BufferCacheHitRatio"],
+        "colors": ["#e74c3c", "#3498db", "#2ecc71"],
+        "desc": ["CPU", "Memory", "Cache Hit Ratio"],
+    },
+    "Performance (%) - READ_REPLICA": {
+        "metrics": ["READ_REPLICA_CpuUtilization", "READ_REPLICA_MemoryUtilization", "READ_REPLICA_BufferCacheHitRatio"],
         "colors": ["#e74c3c", "#3498db", "#2ecc71"],
         "desc": ["CPU", "Memory", "Cache Hit Ratio"],
     },
     "Connections": {
-        "metrics": ["Connections"],
-        "colors": ["#e67e22"],
-        "desc": ["Connections"],
+        "metrics": ["PRIMARY_Connections", "READ_REPLICA_Connections"],
+        "colors": ["#e67e22", "#9b59b6"],
+        "desc": ["PRIMARY", "READ_REPLICA"],
     },
-    "IOPS": {
-        "metrics": ["ReadIops", "WriteIops"],
+    "IOPS - PRIMARY": {
+        "metrics": ["PRIMARY_ReadIops", "PRIMARY_WriteIops"],
+        "colors": ["#3498db", "#e74c3c"],
+        "desc": ["Read IOPS", "Write IOPS"],
+    },
+    "IOPS - READ_REPLICA": {
+        "metrics": ["READ_REPLICA_ReadIops", "READ_REPLICA_WriteIops"],
         "colors": ["#3498db", "#e74c3c"],
         "desc": ["Read IOPS", "Write IOPS"],
     },
     "Latency (ms)": {
-        "metrics": ["ReadLatency", "WriteLatency"],
-        "colors": ["#3498db", "#e74c3c"],
-        "desc": ["Read Latency", "Write Latency"],
+        "metrics": ["PRIMARY_ReadLatency", "PRIMARY_WriteLatency", "READ_REPLICA_ReadLatency", "READ_REPLICA_WriteLatency"],
+        "colors": ["#3498db", "#e74c3c", "#1abc9c", "#e67e22"],
+        "desc": ["P-Read", "P-Write", "RR-Read", "RR-Write"],
     },
     "Throughput (bytes/s)": {
-        "metrics": ["ReadThroughput", "WriteThroughput"],
-        "colors": ["#3498db", "#e74c3c"],
-        "desc": ["Read", "Write"],
+        "metrics": ["PRIMARY_ReadThroughput", "PRIMARY_WriteThroughput", "READ_REPLICA_ReadThroughput", "READ_REPLICA_WriteThroughput"],
+        "colors": ["#3498db", "#e74c3c", "#1abc9c", "#e67e22"],
+        "desc": ["P-Read", "P-Write", "RR-Read", "RR-Write"],
     },
     "Storage (bytes)": {
-        "metrics": ["DataUsedStorage", "UsedStorage", "WalUsedStorage"],
+        "metrics": ["PRIMARY_DataUsedStorage", "PRIMARY_UsedStorage", "PRIMARY_WalUsedStorage"],
         "colors": ["#e74c3c", "#3498db", "#f39c12"],
         "desc": ["Data Used", "Total Used", "WAL Used"],
     },
     "Safety": {
-        "metrics": ["Deadlocks", "TxidWrapLimit"],
+        "metrics": ["PRIMARY_Deadlocks", "PRIMARY_TxidWrapLimit"],
         "colors": ["#e74c3c", "#95a5a6"],
         "desc": ["Deadlocks", "TxID Wrap Limit"],
     },
@@ -125,10 +135,10 @@ MYSQL_KEY_METRICS = [
 ]
 
 PG_KEY_METRICS = [
-    ("CpuUtilization", "CPU Utilization (%)", "#e74c3c"),
-    ("BufferCacheHitRatio", "Buffer Cache Hit Ratio (%)", "#2ecc71"),
-    ("ReadIops", "Read IOPS", "#3498db"),
-    ("WriteLatency", "Write Latency (ms)", "#e67e22"),
+    ("PRIMARY_CpuUtilization", "PRIMARY CPU Utilization (%)", "#e74c3c"),
+    ("PRIMARY_BufferCacheHitRatio", "PRIMARY Buffer Cache Hit (%)", "#2ecc71"),
+    ("PRIMARY_ReadIops", "PRIMARY Read IOPS", "#3498db"),
+    ("PRIMARY_WriteLatency", "PRIMARY Write Latency (ms)", "#e67e22"),
 ]
 
 
@@ -413,7 +423,7 @@ def analyze_metrics(metrics, namespace):
     is_mysql = "mysql" in namespace.lower()
 
     # ---- 1. CPU Analysis ----
-    cpu_name = "CPUUtilization" if is_mysql else "CpuUtilization"
+    cpu_name = "CPUUtilization" if is_mysql else "PRIMARY_CpuUtilization"
     cpu = get_stat(metrics, cpu_name)
     if cpu:
         lines.append("### 1. CPU Utilization\n")
@@ -439,7 +449,8 @@ def analyze_metrics(metrics, namespace):
         lines.append("")
 
     # ---- 2. Memory Analysis ----
-    mem = get_stat(metrics, "MemoryUtilization")
+    mem_name = "MemoryUtilization" if is_mysql else "PRIMARY_MemoryUtilization"
+    mem = get_stat(metrics, mem_name)
     if mem:
         lines.append("### 2. Memory Utilization\n")
         lines.append(f"| Metric | Mean | Max | P95 |")
@@ -474,10 +485,10 @@ def analyze_metrics(metrics, namespace):
         write_bytes = get_stat(metrics, "DbVolumeWriteBytes")
         vol_util = get_stat(metrics, "DbVolumeUtilization")
     else:
-        read_iops = get_stat(metrics, "ReadIops")
-        write_iops = get_stat(metrics, "WriteIops")
-        read_bytes = get_stat(metrics, "ReadThroughput")
-        write_bytes = get_stat(metrics, "WriteThroughput")
+        read_iops = get_stat(metrics, "PRIMARY_ReadIops")
+        write_iops = get_stat(metrics, "PRIMARY_WriteIops")
+        read_bytes = get_stat(metrics, "PRIMARY_ReadThroughput")
+        write_bytes = get_stat(metrics, "PRIMARY_WriteThroughput")
         vol_util = None
 
     if read_iops or write_iops:
@@ -522,7 +533,7 @@ def analyze_metrics(metrics, namespace):
         active_conn = get_stat(metrics, "ActiveConnections")
         current_conn = get_stat(metrics, "CurrentConnections")
     else:
-        active_conn = get_stat(metrics, "Connections")
+        active_conn = get_stat(metrics, "PRIMARY_Connections")
         current_conn = None
 
     if active_conn:
@@ -572,10 +583,10 @@ def analyze_metrics(metrics, namespace):
 
     # ---- 6. PostgreSQL Safety ----
     if not is_mysql:
-        deadlocks = get_stat(metrics, "Deadlocks")
-        cache_hit = get_stat(metrics, "BufferCacheHitRatio")
-        read_lat = get_stat(metrics, "ReadLatency")
-        write_lat = get_stat(metrics, "WriteLatency")
+        deadlocks = get_stat(metrics, "PRIMARY_Deadlocks")
+        cache_hit = get_stat(metrics, "PRIMARY_BufferCacheHitRatio")
+        read_lat = get_stat(metrics, "PRIMARY_ReadLatency")
+        write_lat = get_stat(metrics, "PRIMARY_WriteLatency")
 
         if cache_hit:
             lines.append("### 5. Buffer Cache\n")
@@ -618,8 +629,8 @@ def analyze_metrics(metrics, namespace):
         stor_used = get_stat(metrics, "StorageUsed")
         stor_alloc = get_stat(metrics, "StorageAllocated")
     else:
-        stor_used = get_stat(metrics, "UsedStorage")
-        stor_alloc = get_stat(metrics, "DataUsedStorage")
+        stor_used = get_stat(metrics, "PRIMARY_UsedStorage")
+        stor_alloc = get_stat(metrics, "PRIMARY_DataUsedStorage")
 
     if stor_used:
         lines.append(f"### {'7' if is_mysql else '7'}. Storage\n")
