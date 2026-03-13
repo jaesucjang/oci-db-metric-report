@@ -184,7 +184,7 @@ def chart_overview(metrics, categories, meta, output_path):
     if n == 0:
         return
 
-    fig, axes = plt.subplots(n, 1, figsize=(16, 3.5 * n), sharex=True)
+    fig, axes = plt.subplots(n, 1, figsize=(16, 3.5 * n))
     if n == 1:
         axes = [axes]
 
@@ -201,8 +201,8 @@ def chart_overview(metrics, categories, meta, output_path):
         ax.grid(True, alpha=0.3, linestyle='--')
         ax.xaxis.set_major_formatter(mdates.DateFormatter("%H:%M"))
         ax.xaxis.set_major_locator(mdates.MinuteLocator(interval=5))
-
-    axes[-1].set_xlabel("Time (KST, UTC+9)", fontsize=11)
+        ax.tick_params(axis='x', labelsize=8)
+        ax.set_xlabel("Time (KST)", fontsize=9, color='#656d76')
     period = f"{utc_to_kst_str(meta.get('start_time',''))} ~ {utc_to_kst_str(meta.get('end_time',''))}"
     fig.suptitle(f"{title} - Overview ({period})", fontsize=14, fontweight="bold", y=1.01)
     plt.tight_layout()
