@@ -184,10 +184,41 @@ def parse_bench_kst(meta, key):
     return pd.Timestamp(val) + KST_OFFSET
 
 
+def auto_xaxis(ax, hours_span):
+    """Set x-axis locator and formatter based on time span."""
+    if hours_span <= 2:
+        ax.xaxis.set_major_locator(mdates.MinuteLocator(interval=5))
+        ax.xaxis.set_major_formatter(mdates.DateFormatter("%H:%M"))
+    elif hours_span <= 6:
+        ax.xaxis.set_major_locator(mdates.MinuteLocator(interval=15))
+        ax.xaxis.set_major_formatter(mdates.DateFormatter("%H:%M"))
+    elif hours_span <= 12:
+        ax.xaxis.set_major_locator(mdates.HourLocator(interval=1))
+        ax.xaxis.set_major_formatter(mdates.DateFormatter("%H:%M"))
+    elif hours_span <= 24:
+        ax.xaxis.set_major_locator(mdates.HourLocator(interval=2))
+        ax.xaxis.set_major_formatter(mdates.DateFormatter("%m/%d %H:%M"))
+    else:
+        ax.xaxis.set_major_locator(mdates.HourLocator(interval=6))
+        ax.xaxis.set_major_formatter(mdates.DateFormatter("%m/%d %H:%M"))
+
+
+def get_hours_span(meta):
+    """Calculate time span in hours from metadata."""
+    try:
+        s = pd.Timestamp(meta.get("start_time", ""))
+        e = pd.Timestamp(meta.get("end_time", ""))
+        return (e - s).total_seconds() / 3600
+    except Exception:
+        return 1
+
+
 def chart_overview(metrics, categories, meta, output_path):
     bench_start = parse_bench_kst(meta, "bench_start")
     bench_end = parse_bench_kst(meta, "bench_end")
     title = meta.get("report_title", "OCI DB Metric Report")
+
+    hours = get_hours_span(meta)
 
     active_cats = {k: v for k, v in categories.items()
                    if any(m in metrics for m in v["metrics"])}
@@ -210,9 +241,8 @@ def chart_overview(metrics, categories, meta, output_path):
         ax.set_ylabel(cat_name, fontsize=10, fontweight='bold')
         ax.legend(loc="upper right", fontsize=8, framealpha=0.9)
         ax.grid(True, alpha=0.3, linestyle='--')
-        ax.xaxis.set_major_formatter(mdates.DateFormatter("%H:%M"))
-        ax.xaxis.set_major_locator(mdates.MinuteLocator(interval=5))
-        ax.tick_params(axis='x', labelsize=8)
+        auto_xaxis(ax, hours)
+        ax.tick_params(axis='x', labelsize=8, rotation=30 if hours > 6 else 0)
         ax.set_xlabel("Time (KST)", fontsize=9, color='#656d76')
     period = f"{utc_to_kst_str(meta.get('start_time',''))} ~ {utc_to_kst_str(meta.get('end_time',''))}"
     fig.suptitle(f"{title} - Overview ({period})", fontsize=14, fontweight="bold", y=1.01)
@@ -233,6 +263,8 @@ def chart_detail(metrics, meta, output_path):
     bench_start = parse_bench_kst(meta, "bench_start")
     bench_end = parse_bench_kst(meta, "bench_end")
 
+    hours = get_hours_span(meta)
+
     fig, axes = plt.subplots(rows, cols, figsize=(18, 3.5 * rows))
     axes = axes.flatten()
 
@@ -248,9 +280,8 @@ def chart_detail(metrics, meta, output_path):
                 va='top', bbox=dict(boxstyle='round', facecolor='wheat', alpha=0.8))
         ax.set_title(m, fontsize=10, fontweight='bold')
         ax.grid(True, alpha=0.3, linestyle='--')
-        ax.xaxis.set_major_formatter(mdates.DateFormatter("%H:%M"))
-        ax.xaxis.set_major_locator(mdates.MinuteLocator(interval=10))
-        ax.tick_params(axis='both', labelsize=7)
+        auto_xaxis(ax, hours)
+        ax.tick_params(axis='both', labelsize=7, rotation=30 if hours > 6 else 0)
 
     for j in range(n, len(axes)):
         axes[j].set_visible(False)
