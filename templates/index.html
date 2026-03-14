@@ -281,13 +281,6 @@
             <input type="text" name="compartment_id" placeholder="ocid1.compartment.oc1..aaaa..." required>
           </div>
           <div class="form-group">
-            <label>Namespace <span class="required">*</span></label>
-            <select name="namespace" required>
-              <option value="oci_mysql_database">MySQL (oci_mysql_database)</option>
-              <option value="oci_postgresql">PostgreSQL (oci_postgresql)</option>
-            </select>
-          </div>
-          <div class="form-group">
             <label>Resource Name</label>
             <div style="display:flex;gap:6px;align-items:center">
               <select name="resource_name" id="resourceSelect" style="flex:1">
@@ -295,7 +288,14 @@
               </select>
               <button type="button" class="btn" id="loadResourcesBtn" style="padding:6px 12px;font-size:12px;white-space:nowrap">조회</button>
             </div>
-            <span class="hint">Compartment/Namespace 입력 후 [조회] 클릭</span>
+            <span class="hint">Compartment 입력 후 [조회] → 선택 시 Namespace 자동 설정</span>
+          </div>
+          <div class="form-group">
+            <label>Namespace <span class="required">*</span></label>
+            <select name="namespace" id="namespaceSelect" required>
+              <option value="oci_mysql_database">MySQL (oci_mysql_database)</option>
+              <option value="oci_postgresql">PostgreSQL (oci_postgresql)</option>
+            </select>
           </div>
           <div class="form-group full">
             <label>Report Title</label>
@@ -949,7 +949,6 @@ function toISO(val) {
 // --- Load Resources ---
 document.getElementById('loadResourcesBtn').addEventListener('click', function() {
   const compId = document.querySelector('[name="compartment_id"]').value.trim();
-  const ns = document.querySelector('[name="namespace"]').value;
   const profileSel = document.querySelector('[name="oci_profile_id"]');
   const profileId = profileSel ? profileSel.value : '';
 
@@ -963,7 +962,7 @@ document.getElementById('loadResourcesBtn').addEventListener('click', function()
   fetch('/api/resources', {
     method: 'POST',
     headers: {'Content-Type': 'application/json'},
-    body: JSON.stringify({compartment_id: compId, namespace: ns, oci_profile_id: profileId}),
+    body: JSON.stringify({compartment_id: compId, oci_profile_id: profileId}),
   }).then(r => r.json()).then(res => {
     sel.innerHTML = '<option value="">(전체 - 자동)</option>';
     if (res.error) {
@@ -971,8 +970,10 @@ document.getElementById('loadResourcesBtn').addEventListener('click', function()
     } else if (res.resources && res.resources.length > 0) {
       res.resources.forEach(r => {
         const opt = document.createElement('option');
-        opt.value = r;
-        opt.textContent = r;
+        opt.value = r.name;
+        opt.dataset.namespace = r.namespace;
+        const nsLabel = r.namespace === 'oci_postgresql' ? 'PG' : 'MySQL';
+        opt.textContent = r.name + ' (' + nsLabel + ')';
         sel.appendChild(opt);
       });
     } else {
@@ -984,6 +985,15 @@ document.getElementById('loadResourcesBtn').addEventListener('click', function()
     btn.disabled = false;
     btn.textContent = '조회';
   });
+});
+
+// --- Resource 선택 시 Namespace 자동 설정 ---
+document.getElementById('resourceSelect').addEventListener('change', function() {
+  const selected = this.options[this.selectedIndex];
+  const ns = selected.dataset.namespace;
+  if (ns) {
+    document.getElementById('namespaceSelect').value = ns;
+  }
 });
 
 // --- Form submit ---
