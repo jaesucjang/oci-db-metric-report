@@ -278,13 +278,24 @@
           </div>
           <div class="form-group full">
             <label>Compartment <span class="required">*</span></label>
-            <div style="display:flex;gap:6px;align-items:center">
-              <select name="compartment_id" id="compartmentSelect" required style="flex:1">
-                <option value="">-- [조회] 버튼을 클릭하세요 --</option>
+            <div style="display:flex;gap:6px;align-items:center;margin-bottom:4px">
+              <select id="compLevel1" style="flex:1">
+                <option value="">-- [조회] 클릭 --</option>
               </select>
               <button type="button" class="btn" id="loadCompartmentsBtn" style="padding:6px 12px;font-size:12px;white-space:nowrap">조회</button>
             </div>
-            <span class="hint">OCI 테넌시에서 Compartment 3단계까지 자동 조회</span>
+            <div style="display:flex;gap:6px;align-items:center;margin-bottom:4px">
+              <select id="compLevel2" style="flex:1;display:none">
+                <option value="">-- 하위 Compartment --</option>
+              </select>
+            </div>
+            <div style="display:flex;gap:6px;align-items:center">
+              <select id="compLevel3" style="flex:1;display:none">
+                <option value="">-- 하위 Compartment --</option>
+              </select>
+            </div>
+            <input type="hidden" name="compartment_id" id="compartmentId" required>
+            <span class="hint" id="compHint">상위 선택 시 하위 자동 조회 (최대 3단계)</span>
           </div>
           <div class="form-group">
             <label>Namespace <span class="required">*</span></label>
@@ -952,46 +963,124 @@ function toISO(val) {
   return `${d.getUTCFullYear()}-${pad(d.getUTCMonth()+1)}-${pad(d.getUTCDate())}T${pad(d.getUTCHours())}:${pad(d.getUTCMinutes())}:${pad(d.getUTCSeconds())}Z`;
 }
 
-// --- Load Compartments ---
-document.getElementById('loadCompartmentsBtn').addEventListener('click', function() {
-  const profileSel = document.querySelector('[name="oci_profile_id"]');
-  const profileId = profileSel ? profileSel.value : '';
+// --- Compartment cascade (3 levels) ---
+function getProfileId() {
+  const s = document.querySelector('[name="oci_profile_id"]');
+  return s ? s.value : '';
+}
 
-  const btn = this;
-  const sel = document.getElementById('compartmentSelect');
-  btn.disabled = true;
-  btn.textContent = '조회중...';
+function loadCompartments(parentId, targetSelect, clearLevels) {
+  clearLevels.forEach(sel => { sel.innerHTML = '<option value="">-- 하위 Compartment --</option>'; sel.style.display = 'none'; });
+  targetSelect.innerHTML = '<option value="">조회중...</option>';
+  targetSelect.style.display = '';
 
   fetch('/api/compartments', {
     method: 'POST',
     headers: {'Content-Type': 'application/json'},
-    body: JSON.stringify({oci_profile_id: profileId}),
+    body: JSON.stringify({parent_id: parentId, oci_profile_id: getProfileId()}),
   }).then(r => r.json()).then(res => {
-    sel.innerHTML = '<option value="">-- Compartment 선택 --</option>';
     if (res.error) {
-      alert('Compartment 조회 실패: ' + res.error);
-    } else if (res.compartments && res.compartments.length > 0) {
+      targetSelect.innerHTML = '<option value="">조회 실패</option>';
+      alert('조회 실패: ' + res.error);
+      return;
+    }
+    targetSelect.innerHTML = '<option value="">(이 Compartment 사용)</option>';
+    if (res.compartments && res.compartments.length > 0) {
       res.compartments.forEach(c => {
         const opt = document.createElement('option');
         opt.value = c.id;
-        opt.textContent = c.label;
-        sel.appendChild(opt);
+        opt.textContent = c.name;
+        targetSelect.appendChild(opt);
       });
-    } else {
-      alert('Compartment가 없습니다.');
     }
   }).catch(err => {
+    targetSelect.innerHTML = '<option value="">오류</option>';
     alert('조회 오류: ' + err);
-  }).finally(() => {
-    btn.disabled = false;
-    btn.textContent = '조회';
   });
+}
+
+function updateCompartmentId() {
+  const l3 = document.getElementById('compLevel3');
+  const l2 = document.getElementById('compLevel2');
+  const l1 = document.getElementById('compLevel1');
+  // Use deepest non-empty selection, or parent if "(이 Compartment 사용)" chosen
+  let selected = '';
+  if (l3.style.display !== 'none' && l3.value) selected = l3.value;
+  else if (l2.style.display !== 'none' && l2.value) selected = l2.value;
+  else if (l1.value) selected = l1.value;
+
+  // If a level shows but has "(이 Compartment 사용)" selected, use the parent
+  if (!selected) {
+    if (l3.style.display !== 'none' && l2.value) selected = l2.value;
+    else if (l2.style.display !== 'none' && l1.value) selected = l1.value;
+  }
+
+  document.getElementById('compartmentId').value = selected;
+  document.getElementById('compHint').textContent = selected ? selected.substring(0, 50) + '...' : '상위 선택 시 하위 자동 조회 (최대 3단계)';
+  // Reset resources
+  document.getElementById('resourceSelect').innerHTML = '<option value="">(전체 - 자동)</option>';
+}
+
+const compL1 = document.getElementById('compLevel1');
+const compL2 = document.getElementById('compLevel2');
+const compL3 = document.getElementById('compLevel3');
+
+// [조회] = load Level 1 (tenancy root children)
+document.getElementById('loadCompartmentsBtn').addEventListener('click', function() {
+  const btn = this;
+  btn.disabled = true;
+  btn.textContent = '조회중...';
+  compL2.style.display = 'none';
+  compL3.style.display = 'none';
+  compL1.innerHTML = '<option value="">조회중...</option>';
+
+  fetch('/api/compartments', {
+    method: 'POST',
+    headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify({oci_profile_id: getProfileId()}),
+  }).then(r => r.json()).then(res => {
+    compL1.innerHTML = '<option value="">-- Compartment 선택 --</option>';
+    if (res.error) {
+      alert('조회 실패: ' + res.error);
+    } else if (res.compartments && res.compartments.length > 0) {
+      // Add root compartment option
+      const rootOpt = document.createElement('option');
+      rootOpt.value = res.parent_id;
+      rootOpt.textContent = '(Root Compartment)';
+      compL1.appendChild(rootOpt);
+      res.compartments.forEach(c => {
+        const opt = document.createElement('option');
+        opt.value = c.id;
+        opt.textContent = c.name;
+        compL1.appendChild(opt);
+      });
+    }
+  }).catch(err => alert('조회 오류: ' + err))
+    .finally(() => { btn.disabled = false; btn.textContent = '조회'; });
 });
 
-// Compartment 변경 시 Resource 목록 초기화
-document.getElementById('compartmentSelect').addEventListener('change', function() {
-  const sel = document.getElementById('resourceSelect');
-  sel.innerHTML = '<option value="">(전체 - 자동)</option>';
+// Level 1 선택 → Level 2 로드
+compL1.addEventListener('change', function() {
+  compL2.style.display = 'none';
+  compL3.style.display = 'none';
+  updateCompartmentId();
+  if (this.value) {
+    loadCompartments(this.value, compL2, [compL3]);
+  }
+});
+
+// Level 2 선택 → Level 3 로드
+compL2.addEventListener('change', function() {
+  compL3.style.display = 'none';
+  updateCompartmentId();
+  if (this.value) {
+    loadCompartments(this.value, compL3, []);
+  }
+});
+
+// Level 3 선택
+compL3.addEventListener('change', function() {
+  updateCompartmentId();
 });
 
 // --- Load Resources ---

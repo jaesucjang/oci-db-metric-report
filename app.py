@@ -253,8 +253,9 @@ def index():
 
 @app.route("/api/compartments", methods=["POST"])
 def api_compartments():
-    """List compartments up to 3 levels deep from tenancy root."""
+    """List child compartments of a given parent (or tenancy root)."""
     data = request.json or {}
+    parent_id = data.get("parent_id", "")
     profile_id = data.get("oci_profile_id", "")
 
     # Build OCI CLI args
@@ -267,71 +268,39 @@ def api_compartments():
             oci_args += ["--config-file", config_path]
             oci_config_path = config_path
 
-    # Read tenancy OCID from OCI config
-    tenancy_id = None
-    try:
-        import configparser
-        cfg = configparser.ConfigParser()
-        cfg.read(oci_config_path)
-        tenancy_id = cfg.get(oci_profile, "tenancy", fallback=None)
-    except Exception:
-        pass
-
-    if not tenancy_id:
-        return jsonify({"error": "Cannot read tenancy from OCI config"}), 500
-
-    def list_children(parent_id, depth, max_depth=3):
-        if depth > max_depth:
-            return []
-        cmd = [
-            "oci", "iam", "compartment", "list",
-            *oci_args,
-            "--compartment-id", parent_id,
-            "--lifecycle-state", "ACTIVE",
-            "--all",
-            "--output", "json",
-        ]
+    # If no parent_id, use tenancy root
+    if not parent_id:
         try:
-            result = subprocess.run(cmd, capture_output=True, text=True, timeout=30)
-            if result.returncode != 0:
-                return []
-            items = json.loads(result.stdout).get("data", [])
-            compartments = []
-            for c in items:
-                node = {
-                    "id": c["id"],
-                    "name": c["name"],
-                    "depth": depth,
-                }
-                children = list_children(c["id"], depth + 1, max_depth)
-                if children:
-                    node["children"] = children
-                compartments.append(node)
-            compartments.sort(key=lambda x: x["name"])
-            return compartments
+            import configparser
+            cfg = configparser.ConfigParser()
+            cfg.read(oci_config_path)
+            parent_id = cfg.get(oci_profile, "tenancy", fallback=None)
         except Exception:
-            return []
+            pass
+        if not parent_id:
+            return jsonify({"error": "Cannot read tenancy from OCI config"}), 500
 
-    # Root = tenancy itself
-    tree = [{
-        "id": tenancy_id,
-        "name": "(Root Compartment)",
-        "depth": 0,
-        "children": list_children(tenancy_id, 1),
-    }]
+    cmd = [
+        "oci", "iam", "compartment", "list",
+        *oci_args,
+        "--compartment-id", parent_id,
+        "--lifecycle-state", "ACTIVE",
+        "--all",
+        "--output", "json",
+    ]
 
-    # Flatten tree for dropdown
-    flat = []
-    def flatten(nodes, prefix=""):
-        for n in nodes:
-            indent = "  " * n["depth"]
-            label = f"{indent}{prefix}{n['name']}"
-            flat.append({"id": n["id"], "name": n["name"], "label": label, "depth": n["depth"]})
-            if "children" in n:
-                flatten(n["children"])
-    flatten(tree)
-
-    return jsonify({"compartments": flat})
+    try:
+        result = subprocess.run(cmd, capture_output=True, text=True, timeout=30)
+        if result.returncode != 0:
+            return jsonify({"error": result.stderr[:300]}), 500
+        items = json.loads(result.stdout).get("data", [])
+        compartments = [{"id": c["id"], "name": c["name"]} for c in items]
+        compartments.sort(key=lambda x: x["name"])
+        return jsonify({"parent_id": parent_id, "compartments": compartments})
+    except subprocess.TimeoutExpired:
+        return jsonify({"error": "OCI CLI timeout"}), 504
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
 
 
 @app.route("/api/resources", methods=["POST"])
