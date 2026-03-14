@@ -221,27 +221,29 @@ def run_job(job_id, config):
         jobs[job_id]["log"] += result.stdout + result.stderr
 
         # --- Step 5: AI Analysis (GenAI) ---
-        jobs[job_id]["status"] = "analyzing"
-        jobs[job_id]["progress"] = 90
-        jobs[job_id]["log"] += "\n=== Step 4: AI Analysis (GenAI) ===\n"
-        try:
-            from genai_analysis import generate_ai_analysis
-            ai_result = generate_ai_analysis(metrics_dir, config.get("namespace", ""))
-            if ai_result and not ai_result.startswith("[GenAI Error]"):
-                # Append AI analysis to analysis.md
-                analysis_path = os.path.join(metrics_dir, "analysis.md")
-                with open(analysis_path, "a") as f:
-                    f.write("\n\n---\n\n")
-                    f.write("### AI-Powered Analysis (OCI GenAI)\n\n")
-                    f.write(ai_result)
-                    f.write("\n")
-                jobs[job_id]["log"] += "AI analysis generated successfully.\n"
-            elif ai_result:
-                jobs[job_id]["log"] += f"{ai_result}\n"
-            else:
-                jobs[job_id]["log"] += "GenAI not configured or no data. Skipped.\n"
-        except Exception as e:
-            jobs[job_id]["log"] += f"AI analysis error (non-fatal): {e}\n"
+        if config.get("use_genai", False):
+            jobs[job_id]["status"] = "analyzing"
+            jobs[job_id]["progress"] = 90
+            jobs[job_id]["log"] += "\n=== Step 4: AI Analysis (GenAI) ===\n"
+            try:
+                from genai_analysis import generate_ai_analysis
+                ai_result = generate_ai_analysis(metrics_dir, config.get("namespace", ""))
+                if ai_result and not ai_result.startswith("[GenAI Error]"):
+                    analysis_path = os.path.join(metrics_dir, "analysis.md")
+                    with open(analysis_path, "a") as f:
+                        f.write("\n\n---\n\n")
+                        f.write("### AI-Powered Analysis (OCI GenAI)\n\n")
+                        f.write(ai_result)
+                        f.write("\n")
+                    jobs[job_id]["log"] += "AI analysis generated successfully.\n"
+                elif ai_result:
+                    jobs[job_id]["log"] += f"{ai_result}\n"
+                else:
+                    jobs[job_id]["log"] += "GenAI not configured or no data. Skipped.\n"
+            except Exception as e:
+                jobs[job_id]["log"] += f"AI analysis error (non-fatal): {e}\n"
+        else:
+            jobs[job_id]["log"] += "\n=== Step 4: AI Analysis — Skipped (disabled) ===\n"
 
         jobs[job_id]["progress"] = 100
         jobs[job_id]["status"] = "done"

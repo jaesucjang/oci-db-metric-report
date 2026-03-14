@@ -380,10 +380,14 @@
             <span class="hint">타임라인 드래그 또는 직접 입력</span>
           </div>
         </div>
-        <div class="actions">
+        <div class="actions" style="display:flex;align-items:center;gap:16px;">
           <button type="submit" class="btn btn-primary" id="runBtn">
             Generate Report
           </button>
+          <label style="display:flex;align-items:center;gap:6px;font-size:13px;color:var(--text-muted);cursor:pointer;">
+            <input type="checkbox" id="chkGenai" checked style="width:16px;height:16px;cursor:pointer;">
+            AI Analysis (GenAI)
+          </label>
         </div>
       </form>
     </div>
@@ -727,6 +731,15 @@ function loadGenaiConfig() {
     document.getElementById('genaiModel').value = cfg.model || '';
     document.getElementById('genaiApiKey').value = '';
     document.getElementById('genaiApiKey').placeholder = cfg.api_key_masked || 'sk-...';
+    // Sync checkbox on New Report tab
+    const chk = document.getElementById('chkGenai');
+    if (cfg.enabled && cfg.api_key_masked) {
+      chk.checked = true;
+      chk.disabled = false;
+    } else {
+      chk.checked = false;
+      chk.disabled = true;
+    }
   });
 }
 
@@ -1272,6 +1285,8 @@ document.getElementById('configForm').addEventListener('submit', function(e) {
     if (k.includes('time') && v) data[k] = toISO(v);
     else data[k] = v;
   }
+
+  data.use_genai = document.getElementById('chkGenai').checked;
 
   document.getElementById('runBtn').disabled = true;
   document.getElementById('progressArea').classList.add('active');
