@@ -466,7 +466,7 @@ MIIEpAIBAAKCAQEA...
   <img class="modal-img" id="modalImg" src="">
 </div>
 
-<script>
+{% raw %}<script>
 // --- Tab switching ---
 function switchTab(tabName) {
   document.querySelectorAll('.tab').forEach(x => x.classList.remove('active'));
@@ -1145,6 +1145,6 @@ function downloadPdf(jobId) {
     btn.disabled = false;
   });
 }
-</script>
+{% endraw %}</script>
 </body>
 </html>
