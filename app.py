@@ -251,6 +251,56 @@ def index():
     return render_template("index.html")
 
 
+@app.route("/api/resources", methods=["POST"])
+def api_resources():
+    """List DB resource names in a compartment/namespace via OCI Monitoring API."""
+    data = request.json or {}
+    compartment_id = data.get("compartment_id", "")
+    namespace = data.get("namespace", "")
+    profile_id = data.get("oci_profile_id", "")
+
+    if not compartment_id or not namespace:
+        return jsonify({"error": "compartment_id and namespace required"}), 400
+
+    # Build OCI CLI args
+    oci_args = []
+    if profile_id:
+        config_path, _ = get_profile_oci_paths(profile_id)
+        if config_path:
+            oci_args += ["--config-file", config_path]
+
+    cmd = [
+        "oci", "monitoring", "metric", "list",
+        *oci_args,
+        "--compartment-id", compartment_id,
+        "--namespace", namespace,
+        "--output", "json",
+    ]
+
+    try:
+        result = subprocess.run(cmd, capture_output=True, text=True, timeout=30)
+        if result.returncode != 0:
+            return jsonify({"error": result.stderr[:300]}), 500
+
+        import json as _json
+        metrics_data = _json.loads(result.stdout).get("data", [])
+
+        # Extract unique resourceName values, excluding backups
+        resources = set()
+        for m in metrics_data:
+            dims = m.get("dimensions", {})
+            rname = dims.get("resourceName", "")
+            rid = dims.get("resourceId", "")
+            if rname and "backup" not in rname.lower() and "backup" not in rid.lower():
+                resources.add(rname)
+
+        return jsonify({"resources": sorted(resources)})
+    except subprocess.TimeoutExpired:
+        return jsonify({"error": "OCI CLI timeout"}), 504
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
 @app.route("/api/run", methods=["POST"])
 def api_run():
     data = request.json

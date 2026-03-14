@@ -339,8 +339,13 @@
           </div>
           <div class="form-group">
             <label>Resource Name</label>
-            <input type="text" name="resource_name" placeholder="e.g., mysql20260314120334">
-            <span class="hint">MySQL Source DB 이름 (Replica 자동 감지용, 선택)</span>
+            <div style="display:flex;gap:6px;align-items:center">
+              <select name="resource_name" id="resourceSelect" style="flex:1">
+                <option value="">(전체 - 자동)</option>
+              </select>
+              <button type="button" class="btn" id="loadResourcesBtn" style="padding:6px 12px;font-size:12px;white-space:nowrap">조회</button>
+            </div>
+            <span class="hint">Compartment/Namespace 입력 후 [조회] 클릭</span>
           </div>
           <div class="form-group">
             <label>Report Title</label>
@@ -940,6 +945,46 @@ function toISO(val) {
   const pad = n => String(n).padStart(2, '0');
   return `${d.getUTCFullYear()}-${pad(d.getUTCMonth()+1)}-${pad(d.getUTCDate())}T${pad(d.getUTCHours())}:${pad(d.getUTCMinutes())}:${pad(d.getUTCSeconds())}Z`;
 }
+
+// --- Load Resources ---
+document.getElementById('loadResourcesBtn').addEventListener('click', function() {
+  const compId = document.querySelector('[name="compartment_id"]').value.trim();
+  const ns = document.querySelector('[name="namespace"]').value;
+  const profileSel = document.querySelector('[name="oci_profile_id"]');
+  const profileId = profileSel ? profileSel.value : '';
+
+  if (!compId) { alert('Compartment OCID를 먼저 입력하세요.'); return; }
+
+  const btn = this;
+  const sel = document.getElementById('resourceSelect');
+  btn.disabled = true;
+  btn.textContent = '조회중...';
+
+  fetch('/api/resources', {
+    method: 'POST',
+    headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify({compartment_id: compId, namespace: ns, oci_profile_id: profileId}),
+  }).then(r => r.json()).then(res => {
+    sel.innerHTML = '<option value="">(전체 - 자동)</option>';
+    if (res.error) {
+      alert('조회 실패: ' + res.error);
+    } else if (res.resources && res.resources.length > 0) {
+      res.resources.forEach(r => {
+        const opt = document.createElement('option');
+        opt.value = r;
+        opt.textContent = r;
+        sel.appendChild(opt);
+      });
+    } else {
+      alert('리소스가 없습니다.');
+    }
+  }).catch(err => {
+    alert('조회 오류: ' + err);
+  }).finally(() => {
+    btn.disabled = false;
+    btn.textContent = '조회';
+  });
+});
 
 // --- Form submit ---
 let currentJobId = null;
