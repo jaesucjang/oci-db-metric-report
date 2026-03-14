@@ -951,7 +951,44 @@ function utcToKST(iso) {
 function loadRecent(index) {
   fetch('/api/recent-configs/' + index).then(r => r.json()).then(cfg => {
     const form = document.getElementById('configForm');
+
+    // Set namespace first
+    if (cfg.namespace) {
+      document.getElementById('namespaceSelect').value = cfg.namespace;
+    }
+
+    // Set compartment_id hidden field and show OCID in hint
+    if (cfg.compartment_id) {
+      document.getElementById('compartmentId').value = cfg.compartment_id;
+      const hint = document.getElementById('compHint');
+      if (hint) hint.textContent = cfg.compartment_id;
+    }
+
+    // Set resource_name: add option if not present
+    if (cfg.resource_name) {
+      const resSel = document.getElementById('resourceSelect');
+      let found = false;
+      for (const opt of resSel.options) {
+        if (opt.value === cfg.resource_name) { found = true; break; }
+      }
+      if (!found) {
+        const opt = document.createElement('option');
+        opt.value = cfg.resource_name;
+        opt.textContent = cfg.resource_name;
+        resSel.appendChild(opt);
+      }
+      resSel.value = cfg.resource_name;
+    }
+
+    // Set OCI profile
+    if (cfg.oci_profile_id) {
+      const profSel = document.getElementById('profileSelect');
+      if (profSel) profSel.value = cfg.oci_profile_id;
+    }
+
+    // Set remaining form fields
     Object.entries(cfg).forEach(([k, v]) => {
+      if (['namespace', 'compartment_id', 'resource_name', 'oci_profile_id'].includes(k)) return;
       const el = form.elements[k];
       if (!el) return;
       if (k.includes('time') && v) {
@@ -960,10 +997,7 @@ function loadRecent(index) {
         el.value = v;
       }
     });
-    // Set namespace select
-    if (cfg.namespace) {
-      document.getElementById('namespaceSelect').value = cfg.namespace;
-    }
+
     // Sync timeline slider with loaded values
     if (window.timelineSync) window.timelineSync();
   });
