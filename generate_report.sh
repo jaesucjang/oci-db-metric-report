@@ -138,9 +138,9 @@ fi
 if [ "$NS" = "oci_mysql_database" ]; then
   cat >> "$REPORT_FILE" <<MYSQLNOTE
 
-> **참고**: MySQL HA는 Active-Standby 구성으로, PostgreSQL과 달리 개별 노드(Primary/Standby) dimension이 메트릭에 노출되지 않습니다.
-> 모든 메트릭은 DB System 단위(\`resourceName\`)로 수집됩니다.
-> Standby 노드는 자동 Failover 용도이며 Read Endpoint는 미활성 상태입니다.
+> **참고 (HA vs Read Replica)**:
+> - **HA Standby**: 같은 DB System 내부의 Active-Standby. 메트릭이 노드별로 분리되지 않으며, DB System 단위(\`resourceName\`)로만 수집됨.
+> - **Read Replica**: 별도 리소스로 생성되며, 독립적인 \`resourceName\`으로 메트릭이 별도 수집됨.
 
 MYSQLNOTE
 fi

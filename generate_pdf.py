@@ -168,10 +168,9 @@ def generate_pdf(metrics_dir):
         font("I", 8)
         pdf.set_text_color(80, 80, 80)
         pdf.multi_cell(CONTENT_W, 5,
-            "[참고] MySQL HA는 Active-Standby 구성으로, PostgreSQL과 달리 "
-            "개별 노드(Primary/Standby) dimension이 메트릭에 노출되지 않습니다. "
-            "모든 메트릭은 DB System 단위(resourceName)로 수집됩니다. "
-            "Standby 노드는 자동 Failover 용도이며 Read Endpoint는 미활성 상태입니다.")
+            "[참고] MySQL HA Standby는 DB System 내부 Active-Standby로, "
+            "메트릭이 노드별 분리되지 않고 DB System 단위(resourceName)로 수집됩니다. "
+            "Read Replica는 별도 리소스로 독립적인 resourceName으로 메트릭이 별도 수집됩니다.")
         pdf.set_text_color(0, 0, 0)
 
     # ================================================================
