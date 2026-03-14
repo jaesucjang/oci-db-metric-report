@@ -391,6 +391,9 @@ def api_run():
         "created_at": datetime.now(timezone.utc).isoformat(),
     }
 
+    # Save to recent configs
+    save_recent_config(data)
+
     t = threading.Thread(target=run_job, args=(job_id, data), daemon=True)
     t.start()
 
@@ -783,74 +786,63 @@ def api_test_profile(profile_id):
 
 
 # ============================================================
-# Sample configs API
+# Recent configs (last 3 used configurations)
 # ============================================================
-SAMPLE_CONFIGS = {
-    "mysql_benchmark": {
-        "name": "MySQL Benchmark Sample",
-        "description": "OCI MySQL HeatWave - mysqlslap benchmark metrics (1 OCPU/16GB)",
-        "config": {
-            "oci_config_file": "~/.oci/config",
-            "oci_profile": "DEFAULT",
-            "compartment_id": "ocid1.compartment.oc1..aaaaaaaacnzhu2qnecid46t3nhmptegxzrvbv753r4fwffpa23bd5kbqzaua",
-            "namespace": "oci_mysql_database",
-            "interval": "1m",
-            "start_time": "2026-03-12T06:00:00Z",
-            "end_time": "2026-03-12T07:00:00Z",
-            "bench_start": "2026-03-12T06:29:00Z",
-            "bench_end": "2026-03-12T06:33:00Z",
-            "report_title": "OCI MySQL Benchmark Report",
-        },
-    },
-    "pg_benchmark": {
-        "name": "PostgreSQL Benchmark Sample",
-        "description": "OCI PostgreSQL HA - PGBench benchmark metrics (2 OCPU/32GB)",
-        "config": {
-            "oci_config_file": "~/.oci/config",
-            "oci_profile": "DEFAULT",
-            "compartment_id": "ocid1.compartment.oc1..aaaaaaaacnzhu2qnecid46t3nhmptegxzrvbv753r4fwffpa23bd5kbqzaua",
-            "namespace": "oci_postgresql",
-            "interval": "1m",
-            "start_time": "2026-03-10T09:00:00Z",
-            "end_time": "2026-03-10T10:00:00Z",
-            "bench_start": "2026-03-10T09:15:00Z",
-            "bench_end": "2026-03-10T09:45:00Z",
-            "report_title": "OCI PostgreSQL PGBench Report",
-        },
-    },
-    "mysql_loadtest": {
-        "name": "MySQL Load Test Template",
-        "description": "Template for MySQL sysbench load test (edit times)",
-        "config": {
-            "oci_config_file": "~/.oci/config",
-            "oci_profile": "DEFAULT",
-            "compartment_id": "",
-            "namespace": "oci_mysql_database",
-            "interval": "1m",
-            "start_time": "",
-            "end_time": "",
-            "bench_start": "",
-            "bench_end": "",
-            "report_title": "OCI MySQL Load Test Report",
-        },
-    },
-}
+RECENT_CONFIGS_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "output", "recent_configs.json")
 
 
-@app.route("/api/samples")
-def api_samples():
+def load_recent_configs():
+    if os.path.isfile(RECENT_CONFIGS_FILE):
+        try:
+            with open(RECENT_CONFIGS_FILE) as f:
+                return json.load(f)
+        except Exception:
+            pass
+    return []
+
+
+def save_recent_config(config):
+    """Save config to recent list (max 3, newest first, no duplicates)."""
+    recents = load_recent_configs()
+    # Build a key for dedup (namespace + compartment + resource_name)
+    key = f"{config.get('namespace', '')}|{config.get('compartment_id', '')}|{config.get('resource_name', '')}"
+    # Remove existing entry with same key
+    recents = [r for r in recents if f"{r['config'].get('namespace', '')}|{r['config'].get('compartment_id', '')}|{r['config'].get('resource_name', '')}" != key]
+    # Build label
+    ns_short = "PG" if "postgresql" in config.get("namespace", "") else "MySQL"
+    rname = config.get("resource_name", "") or "(전체)"
+    title = config.get("report_title", "")
+    entry = {
+        "label": f"{ns_short} - {rname}",
+        "description": title,
+        "saved_at": datetime.now(timezone.utc).isoformat(),
+        "config": {k: v for k, v in config.items() if k not in ("log",)},
+    }
+    recents.insert(0, entry)
+    recents = recents[:3]
+    try:
+        os.makedirs(os.path.dirname(RECENT_CONFIGS_FILE), exist_ok=True)
+        with open(RECENT_CONFIGS_FILE, "w") as f:
+            json.dump(recents, f, indent=2)
+    except Exception:
+        pass
+
+
+@app.route("/api/recent-configs")
+def api_recent_configs():
+    recents = load_recent_configs()
     return jsonify([
-        {"id": k, "name": v["name"], "description": v["description"]}
-        for k, v in SAMPLE_CONFIGS.items()
+        {"index": i, "label": r["label"], "description": r["description"], "saved_at": r.get("saved_at", "")}
+        for i, r in enumerate(recents)
     ])
 
 
-@app.route("/api/samples/<sample_id>")
-def api_sample(sample_id):
-    sample = SAMPLE_CONFIGS.get(sample_id)
-    if not sample:
+@app.route("/api/recent-configs/<int:index>")
+def api_recent_config(index):
+    recents = load_recent_configs()
+    if index < 0 or index >= len(recents):
         return jsonify({"error": "Not found"}), 404
-    return jsonify(sample["config"])
+    return jsonify(recents[index]["config"])
 
 
 @app.after_request

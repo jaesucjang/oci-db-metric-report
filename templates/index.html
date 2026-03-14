@@ -241,10 +241,10 @@
   <!-- Tab: New Report -->
   <div class="tab-content active" id="tab-new">
 
-    <!-- Sample configs -->
-    <div class="card">
-      <h3>Sample Configs</h3>
-      <div class="sample-cards" id="sampleCards"></div>
+    <!-- Recent configs -->
+    <div class="card" id="recentConfigsCard" style="display:none">
+      <h3>Recent Configs</h3>
+      <div class="sample-cards" id="recentCards"></div>
     </div>
 
     <!-- Config form -->
@@ -919,16 +919,25 @@ loadConfigProfiles();
   };
 })();
 
-// --- Load samples ---
-fetch('/api/samples').then(r => r.json()).then(samples => {
-  const el = document.getElementById('sampleCards');
-  el.innerHTML = samples.map(s => `
-    <div class="sample-card" onclick="loadSample('${s.id}')">
-      <h4>${s.name}</h4>
-      <p>${s.description}</p>
-    </div>
-  `).join('');
-});
+// --- Load recent configs ---
+function loadRecentConfigs() {
+  fetch('/api/recent-configs').then(r => r.json()).then(recents => {
+    const card = document.getElementById('recentConfigsCard');
+    const el = document.getElementById('recentCards');
+    if (!recents || recents.length === 0) {
+      card.style.display = 'none';
+      return;
+    }
+    card.style.display = '';
+    el.innerHTML = recents.map(s => `
+      <div class="sample-card" onclick="loadRecent(${s.index})">
+        <h4>${s.label}</h4>
+        <p>${s.description}</p>
+      </div>
+    `).join('');
+  });
+}
+loadRecentConfigs();
 
 // --- UTC ISO string to KST datetime-local string ---
 function utcToKST(iso) {
@@ -939,19 +948,22 @@ function utcToKST(iso) {
   return `${kst.getUTCFullYear()}-${pad(kst.getUTCMonth()+1)}-${pad(kst.getUTCDate())}T${pad(kst.getUTCHours())}:${pad(kst.getUTCMinutes())}`;
 }
 
-function loadSample(id) {
-  fetch('/api/samples/' + id).then(r => r.json()).then(cfg => {
+function loadRecent(index) {
+  fetch('/api/recent-configs/' + index).then(r => r.json()).then(cfg => {
     const form = document.getElementById('configForm');
     Object.entries(cfg).forEach(([k, v]) => {
       const el = form.elements[k];
       if (!el) return;
       if (k.includes('time') && v) {
-        // Convert UTC to KST for display
         el.value = utcToKST(v);
       } else {
         el.value = v;
       }
     });
+    // Set namespace select
+    if (cfg.namespace) {
+      document.getElementById('namespaceSelect').value = cfg.namespace;
+    }
     // Sync timeline slider with loaded values
     if (window.timelineSync) window.timelineSync();
   });
@@ -1149,6 +1161,7 @@ document.getElementById('configForm').addEventListener('submit', function(e) {
     body: JSON.stringify(data),
   }).then(r => r.json()).then(res => {
     currentJobId = res.job_id;
+    loadRecentConfigs();
     pollStatus();
   });
 });
