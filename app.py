@@ -405,7 +405,15 @@ def api_pdf(job_id):
     if not os.path.isfile(pdf_path):
         return jsonify({"error": "PDF file not created"}), 500
 
-    return send_from_directory(metrics_dir, "REPORT.pdf", as_attachment=True)
+    # Build descriptive filename: REPORT_MySQL_20260313_1500_1600.pdf
+    cfg = job.get("config", {})
+    ns_short = "PG" if "postgresql" in cfg.get("namespace", "") else "MySQL"
+    st = cfg.get("start_time", "")[:16].replace("-", "").replace("T", "_").replace(":", "")
+    et = cfg.get("end_time", "")[:16].replace("-", "").replace("T", "_").replace(":", "")
+    pdf_name = f"REPORT_{ns_short}_{st}_{et}.pdf"
+
+    return send_from_directory(metrics_dir, "REPORT.pdf", as_attachment=True,
+                               download_name=pdf_name)
 
 
 @app.route("/api/jobs")
@@ -418,6 +426,8 @@ def api_jobs():
             "namespace": j["config"].get("namespace", ""),
             "created_at": j["created_at"],
             "title": j["config"].get("report_title", ""),
+            "start_time": j["config"].get("start_time", ""),
+            "end_time": j["config"].get("end_time", ""),
         }
         for j in sorted(jobs.values(), key=lambda x: x["created_at"], reverse=True)
     ])

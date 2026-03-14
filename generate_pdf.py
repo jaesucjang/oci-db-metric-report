@@ -163,12 +163,13 @@ def generate_pdf(metrics_dir):
         pdf.cell(CONTENT_W - 45, 8, f"  {val}", new_x="LMARGIN", new_y="NEXT")
 
     # ================================================================
-    # 2. Charts (portrait, fit to content width)
+    # 2. Charts (portrait, auto page break for tall images)
     # ================================================================
     for label, img_path in charts:
         pdf.add_page()
         heading(f"Chart: {label}", 13)
         try:
+            # Let fpdf2 handle page breaks for tall images
             pdf.image(img_path, x=MARGIN, w=CONTENT_W)
         except Exception as e:
             font("", 9)

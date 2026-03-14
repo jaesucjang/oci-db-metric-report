@@ -1101,12 +1101,16 @@ function loadJobs() {
     el.innerHTML = jobs.map(j => {
       const badge = j.status === 'done' ? 'badge-done'
                   : j.status === 'error' ? 'badge-error' : 'badge-running';
+      const period = (j.start_time && j.end_time)
+        ? utcToKST(j.start_time).replace('T',' ') + ' ~ ' + utcToKST(j.end_time).replace('T',' ')
+        : '';
       return `
         <div class="job-item">
           <span class="badge ${badge}">${j.status}</span>
           <div style="flex:1;cursor:pointer;" onclick="window.location='/report/${j.id}'">
             <div style="font-weight:600;font-size:14px">${j.title || j.namespace}</div>
-            <div style="font-size:12px;color:var(--text-muted)">${j.created_at}</div>
+            <div style="font-size:12px;color:var(--text-muted)">Generated: ${j.created_at}</div>
+            ${period ? `<div style="font-size:11px;color:var(--primary);">Period: ${period}</div>` : ''}
           </div>
           <div style="font-size:12px;color:var(--text-muted);margin-right:8px;">${j.namespace}</div>
           <button class="btn btn-primary btn-sm" onclick="event.stopPropagation();downloadPdf('${j.id}')" ${j.status !== 'done' ? 'disabled style="opacity:.4"' : ''}>PDF</button>
