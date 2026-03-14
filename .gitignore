@@ -4,6 +4,7 @@ metrics_*/
 
 # Config with secrets
 config.env
+genai_config.json
 .oci_profiles/
 
 # Python

@@ -220,6 +220,29 @@ def run_job(job_id, config):
         )
         jobs[job_id]["log"] += result.stdout + result.stderr
 
+        # --- Step 5: AI Analysis (GenAI) ---
+        jobs[job_id]["status"] = "analyzing"
+        jobs[job_id]["progress"] = 90
+        jobs[job_id]["log"] += "\n=== Step 4: AI Analysis (GenAI) ===\n"
+        try:
+            from genai_analysis import generate_ai_analysis
+            ai_result = generate_ai_analysis(metrics_dir, config.get("namespace", ""))
+            if ai_result and not ai_result.startswith("[GenAI Error]"):
+                # Append AI analysis to analysis.md
+                analysis_path = os.path.join(metrics_dir, "analysis.md")
+                with open(analysis_path, "a") as f:
+                    f.write("\n\n---\n\n")
+                    f.write("### AI-Powered Analysis (OCI GenAI)\n\n")
+                    f.write(ai_result)
+                    f.write("\n")
+                jobs[job_id]["log"] += "AI analysis generated successfully.\n"
+            elif ai_result:
+                jobs[job_id]["log"] += f"{ai_result}\n"
+            else:
+                jobs[job_id]["log"] += "GenAI not configured or no data. Skipped.\n"
+        except Exception as e:
+            jobs[job_id]["log"] += f"AI analysis error (non-fatal): {e}\n"
+
         jobs[job_id]["progress"] = 100
         jobs[job_id]["status"] = "done"
         jobs[job_id]["metrics_dir"] = metrics_dir
@@ -843,6 +866,63 @@ def api_recent_config(index):
     if index < 0 or index >= len(recents):
         return jsonify({"error": "Not found"}), 404
     return jsonify(recents[index]["config"])
+
+
+# ============================================================
+# GenAI Config API
+# ============================================================
+
+@app.route("/api/genai-config", methods=["GET"])
+def api_get_genai_config():
+    from genai_analysis import load_genai_config, CONFIG_PATH
+    cfg = load_genai_config()
+    if not cfg:
+        # Return defaults if no config
+        cfg = {"enabled": False, "api_key": "", "base_url": "", "model": ""}
+    # Mask API key for display
+    key = cfg.get("api_key", "")
+    if key and len(key) > 10:
+        cfg["api_key_masked"] = key[:6] + "..." + key[-4:]
+    else:
+        cfg["api_key_masked"] = ""
+    cfg.pop("api_key", None)
+    return jsonify(cfg)
+
+
+@app.route("/api/genai-config", methods=["POST"])
+def api_save_genai_config():
+    from genai_analysis import load_genai_config, save_genai_config, CONFIG_PATH
+    data = request.json
+    # Load existing to preserve api_key if not provided
+    existing = load_genai_config() or {}
+    cfg = {
+        "enabled": data.get("enabled", existing.get("enabled", True)),
+        "api_key": data.get("api_key") or existing.get("api_key", ""),
+        "base_url": data.get("base_url") or existing.get("base_url", ""),
+        "model": data.get("model") or existing.get("model", ""),
+    }
+    save_genai_config(cfg)
+    return jsonify({"ok": True})
+
+
+@app.route("/api/genai-test", methods=["POST"])
+def api_test_genai():
+    from genai_analysis import load_genai_config
+    cfg = load_genai_config()
+    if not cfg:
+        return jsonify({"ok": False, "message": "GenAI not configured"})
+    try:
+        from openai import OpenAI
+        client = OpenAI(api_key=cfg["api_key"], base_url=cfg["base_url"])
+        resp = client.chat.completions.create(
+            model=cfg["model"],
+            messages=[{"role": "user", "content": "Say OK"}],
+            max_tokens=10,
+        )
+        text = resp.choices[0].message.content
+        return jsonify({"ok": True, "message": f"Connected! Response: {text}"})
+    except Exception as e:
+        return jsonify({"ok": False, "message": str(e)[:300]})
 
 
 @app.after_request

@@ -111,6 +111,7 @@
     .status-dot.collecting { background: var(--warning); animation: pulse 1s infinite; }
     .status-dot.charting { background: var(--primary); animation: pulse 1s infinite; }
     .status-dot.reporting { background: #8250df; animation: pulse 1s infinite; }
+    .status-dot.analyzing { background: #cf222e; animation: pulse 1s infinite; }
     .status-dot.done { background: var(--success); }
     .status-dot.error { background: var(--danger); }
     @keyframes pulse { 0%,100% { opacity: 1; } 50% { opacity: .4; } }
@@ -487,6 +488,41 @@ MIIEpAIBAAKCAQEA...
       <h3>Saved Profiles</h3>
       <div id="profileList"><p style="color:var(--text-muted);font-size:14px;">No profiles saved yet.</p></div>
     </div>
+
+    <!-- GenAI Settings -->
+    <div class="card">
+      <h3>GenAI Settings (AI Analysis)</h3>
+      <p style="font-size:13px;color:var(--text-muted);margin-bottom:16px;">
+        OCI GenAI (OpenAI-compatible) 설정. 리포트 생성 시 AI 기반 심층 분석을 추가합니다.
+      </p>
+      <div class="form-grid">
+        <div class="form-group">
+          <label>Enabled</label>
+          <select id="genaiEnabled" style="padding:8px;border:1px solid var(--border);border-radius:6px;">
+            <option value="true">On</option>
+            <option value="false">Off</option>
+          </select>
+        </div>
+        <div class="form-group">
+          <label>Model</label>
+          <input type="text" id="genaiModel" placeholder="xai.grok-4-1-fast-non-reasoning">
+        </div>
+        <div class="form-group full">
+          <label>Base URL</label>
+          <input type="text" id="genaiBaseUrl" placeholder="https://inference.generativeai.us-chicago-1.oci.oraclecloud.com/20231130/actions/v1">
+        </div>
+        <div class="form-group full">
+          <label>API Key</label>
+          <input type="password" id="genaiApiKey" placeholder="sk-...">
+          <span class="hint">OCI GenAI API Key (sk-... 형식)</span>
+        </div>
+      </div>
+      <div class="actions" style="margin-top:16px;display:flex;gap:8px;">
+        <button class="btn btn-primary" onclick="saveGenaiConfig()">Save</button>
+        <button class="btn btn-outline" onclick="testGenai()">Test Connection</button>
+      </div>
+      <div id="genaiMsg" style="margin-top:8px;font-size:13px;"></div>
+    </div>
   </div>
 
   <!-- Tab: History -->
@@ -681,9 +717,51 @@ function deleteProfile(id) {
   });
 }
 
-// Init: load profiles + config sections
+// ============================================================
+// GenAI Config
+// ============================================================
+function loadGenaiConfig() {
+  fetch('/api/genai-config').then(r => r.json()).then(cfg => {
+    document.getElementById('genaiEnabled').value = cfg.enabled ? 'true' : 'false';
+    document.getElementById('genaiBaseUrl').value = cfg.base_url || '';
+    document.getElementById('genaiModel').value = cfg.model || '';
+    document.getElementById('genaiApiKey').value = '';
+    document.getElementById('genaiApiKey').placeholder = cfg.api_key_masked || 'sk-...';
+  });
+}
+
+function saveGenaiConfig() {
+  const data = {
+    enabled: document.getElementById('genaiEnabled').value === 'true',
+    base_url: document.getElementById('genaiBaseUrl').value,
+    model: document.getElementById('genaiModel').value,
+  };
+  const apiKey = document.getElementById('genaiApiKey').value;
+  if (apiKey) data.api_key = apiKey;
+  fetch('/api/genai-config', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify(data)})
+    .then(r => r.json()).then(() => {
+      document.getElementById('genaiMsg').innerHTML = '<span style="color:var(--success)">Saved!</span>';
+      loadGenaiConfig();
+      setTimeout(() => document.getElementById('genaiMsg').innerHTML = '', 3000);
+    });
+}
+
+function testGenai() {
+  const msg = document.getElementById('genaiMsg');
+  msg.innerHTML = '<span style="color:var(--text-muted)">Testing...</span>';
+  fetch('/api/genai-test', {method:'POST'}).then(r => r.json()).then(res => {
+    if (res.ok) {
+      msg.innerHTML = '<span style="color:var(--success)">' + res.message + '</span>';
+    } else {
+      msg.innerHTML = '<span style="color:var(--danger)">Failed: ' + res.message + '</span>';
+    }
+  });
+}
+
+// Init: load profiles + config sections + genai
 loadProfiles();
 loadConfigProfiles();
+loadGenaiConfig();
 
 // ============================================================
 // Timeline Range Picker
@@ -1226,6 +1304,7 @@ function pollStatus() {
     const labels = {
       queued: 'Queued...', collecting: 'Collecting metrics from OCI...',
       charting: 'Generating charts...', reporting: 'Building report...',
+      analyzing: 'AI Analysis (GenAI)...',
       done: 'Complete!', error: 'Error: ' + (s.error || ''),
     };
     text.textContent = labels[s.status] || s.status;
