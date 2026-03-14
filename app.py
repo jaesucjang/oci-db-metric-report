@@ -251,6 +251,89 @@ def index():
     return render_template("index.html")
 
 
+@app.route("/api/compartments", methods=["POST"])
+def api_compartments():
+    """List compartments up to 3 levels deep from tenancy root."""
+    data = request.json or {}
+    profile_id = data.get("oci_profile_id", "")
+
+    # Build OCI CLI args
+    oci_args = []
+    oci_config_path = os.path.expanduser("~/.oci/config")
+    oci_profile = "DEFAULT"
+    if profile_id:
+        config_path, _ = get_profile_oci_paths(profile_id)
+        if config_path:
+            oci_args += ["--config-file", config_path]
+            oci_config_path = config_path
+
+    # Read tenancy OCID from OCI config
+    tenancy_id = None
+    try:
+        import configparser
+        cfg = configparser.ConfigParser()
+        cfg.read(oci_config_path)
+        tenancy_id = cfg.get(oci_profile, "tenancy", fallback=None)
+    except Exception:
+        pass
+
+    if not tenancy_id:
+        return jsonify({"error": "Cannot read tenancy from OCI config"}), 500
+
+    def list_children(parent_id, depth, max_depth=3):
+        if depth > max_depth:
+            return []
+        cmd = [
+            "oci", "iam", "compartment", "list",
+            *oci_args,
+            "--compartment-id", parent_id,
+            "--lifecycle-state", "ACTIVE",
+            "--all",
+            "--output", "json",
+        ]
+        try:
+            result = subprocess.run(cmd, capture_output=True, text=True, timeout=30)
+            if result.returncode != 0:
+                return []
+            items = json.loads(result.stdout).get("data", [])
+            compartments = []
+            for c in items:
+                node = {
+                    "id": c["id"],
+                    "name": c["name"],
+                    "depth": depth,
+                }
+                children = list_children(c["id"], depth + 1, max_depth)
+                if children:
+                    node["children"] = children
+                compartments.append(node)
+            compartments.sort(key=lambda x: x["name"])
+            return compartments
+        except Exception:
+            return []
+
+    # Root = tenancy itself
+    tree = [{
+        "id": tenancy_id,
+        "name": "(Root Compartment)",
+        "depth": 0,
+        "children": list_children(tenancy_id, 1),
+    }]
+
+    # Flatten tree for dropdown
+    flat = []
+    def flatten(nodes, prefix=""):
+        for n in nodes:
+            indent = "  " * n["depth"]
+            label = f"{indent}{prefix}{n['name']}"
+            flat.append({"id": n["id"], "name": n["name"], "label": label, "depth": n["depth"]})
+            if "children" in n:
+                flatten(n["children"])
+    flatten(tree)
+
+    return jsonify({"compartments": flat})
+
+
 @app.route("/api/resources", methods=["POST"])
 def api_resources():
     """List DB resource names in a compartment for the given namespace."""

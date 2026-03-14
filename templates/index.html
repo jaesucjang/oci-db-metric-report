@@ -277,8 +277,14 @@
             <span class="hint">Config 파일의 프로파일 섹션 목록 (Load 버튼으로 갱신)</span>
           </div>
           <div class="form-group full">
-            <label>Compartment OCID <span class="required">*</span></label>
-            <input type="text" name="compartment_id" placeholder="ocid1.compartment.oc1..aaaa..." required>
+            <label>Compartment <span class="required">*</span></label>
+            <div style="display:flex;gap:6px;align-items:center">
+              <select name="compartment_id" id="compartmentSelect" required style="flex:1">
+                <option value="">-- [조회] 버튼을 클릭하세요 --</option>
+              </select>
+              <button type="button" class="btn" id="loadCompartmentsBtn" style="padding:6px 12px;font-size:12px;white-space:nowrap">조회</button>
+            </div>
+            <span class="hint">OCI 테넌시에서 Compartment 3단계까지 자동 조회</span>
           </div>
           <div class="form-group">
             <label>Namespace <span class="required">*</span></label>
@@ -945,6 +951,48 @@ function toISO(val) {
   const pad = n => String(n).padStart(2, '0');
   return `${d.getUTCFullYear()}-${pad(d.getUTCMonth()+1)}-${pad(d.getUTCDate())}T${pad(d.getUTCHours())}:${pad(d.getUTCMinutes())}:${pad(d.getUTCSeconds())}Z`;
 }
+
+// --- Load Compartments ---
+document.getElementById('loadCompartmentsBtn').addEventListener('click', function() {
+  const profileSel = document.querySelector('[name="oci_profile_id"]');
+  const profileId = profileSel ? profileSel.value : '';
+
+  const btn = this;
+  const sel = document.getElementById('compartmentSelect');
+  btn.disabled = true;
+  btn.textContent = '조회중...';
+
+  fetch('/api/compartments', {
+    method: 'POST',
+    headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify({oci_profile_id: profileId}),
+  }).then(r => r.json()).then(res => {
+    sel.innerHTML = '<option value="">-- Compartment 선택 --</option>';
+    if (res.error) {
+      alert('Compartment 조회 실패: ' + res.error);
+    } else if (res.compartments && res.compartments.length > 0) {
+      res.compartments.forEach(c => {
+        const opt = document.createElement('option');
+        opt.value = c.id;
+        opt.textContent = c.label;
+        sel.appendChild(opt);
+      });
+    } else {
+      alert('Compartment가 없습니다.');
+    }
+  }).catch(err => {
+    alert('조회 오류: ' + err);
+  }).finally(() => {
+    btn.disabled = false;
+    btn.textContent = '조회';
+  });
+});
+
+// Compartment 변경 시 Resource 목록 초기화
+document.getElementById('compartmentSelect').addEventListener('change', function() {
+  const sel = document.getElementById('resourceSelect');
+  sel.innerHTML = '<option value="">(전체 - 자동)</option>';
+});
 
 // --- Load Resources ---
 document.getElementById('loadResourcesBtn').addEventListener('click', function() {
