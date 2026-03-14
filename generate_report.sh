@@ -47,20 +47,21 @@ if [ ! -d "$METRICS_DIR" ]; then
   exit 1
 fi
 
-# --- Step 2: Generate charts ---
-echo ""
-echo "============================================================"
-echo " Step 2/3: Generating charts..."
-echo "============================================================"
-
-# Check Python deps
-if ! python3 -c "import pandas, matplotlib" 2>/dev/null; then
-  echo "Installing Python dependencies..."
-  pip3 install pandas matplotlib --quiet 2>/dev/null || \
-  pip3 install pandas matplotlib --quiet --break-system-packages 2>/dev/null
+# --- Step 2: Generate charts (skip if already generated) ---
+if [ ! -f "${METRICS_DIR}/chart_overview.png" ]; then
+  echo ""
+  echo "============================================================"
+  echo " Step 2/3: Generating charts..."
+  echo "============================================================"
+  if ! python3 -c "import pandas, matplotlib" 2>/dev/null; then
+    echo "Installing Python dependencies..."
+    pip3 install pandas matplotlib --quiet 2>/dev/null || \
+    pip3 install pandas matplotlib --quiet --break-system-packages 2>/dev/null
+  fi
+  python3 "${SCRIPT_DIR}/generate_charts.py" "$METRICS_DIR"
+else
+  echo " Charts already generated, skipping..."
 fi
-
-python3 "${SCRIPT_DIR}/generate_charts.py" "$METRICS_DIR"
 
 # --- Step 3: Generate Markdown report ---
 echo ""
@@ -68,38 +69,30 @@ echo "============================================================"
 echo " Step 3/3: Generating Markdown report..."
 echo "============================================================"
 
-# Read metadata
-NS=$(jq -r '.namespace // "unknown"' "$META_FILE")
-START=$(jq -r '.start_time // ""' "$META_FILE")
-END=$(jq -r '.end_time // ""' "$META_FILE")
-BENCH_S=$(jq -r '.bench_start // ""' "$META_FILE")
-BENCH_E=$(jq -r '.bench_end // ""' "$META_FILE")
-TITLE=$(jq -r '.report_title // "OCI DB Metric Report"' "$META_FILE")
-COLLECTED=$(jq -r '.collected_at // ""' "$META_FILE")
-PROFILE=$(jq -r '.oci_profile // "DEFAULT"' "$META_FILE")
-INTERVAL_VAL=$(jq -r '.interval // "1m"' "$META_FILE")
+# Read metadata + convert KST (single jq + single python3 call)
+eval $(jq -r '
+  "NS=\(.namespace // "unknown")",
+  "START=\(.start_time // "")",
+  "END=\(.end_time // "")",
+  "BENCH_S=\(.bench_start // "")",
+  "BENCH_E=\(.bench_end // "")",
+  "TITLE=\(.report_title // "OCI DB Metric Report")",
+  "COLLECTED=\(.collected_at // "")",
+  "PROFILE=\(.oci_profile // "DEFAULT")",
+  "INTERVAL_VAL=\(.interval // "1m")"
+' "$META_FILE" | sed 's/^/export /')
 
-# Convert UTC times to KST for display
-utc_to_kst() {
-  local utc_str="$1"
-  [ -z "$utc_str" ] && echo "" && return
-  if command -v python3 &>/dev/null; then
-    python3 -c "
+# Convert all UTC times to KST in one python3 call
+read -r START_KST END_KST BENCH_S_KST BENCH_E_KST <<< $(python3 -c "
 from datetime import datetime, timedelta
-try:
-    t = datetime.strptime('${utc_str}'.rstrip('Z'), '%Y-%m-%dT%H:%M:%S')
-    kst = t + timedelta(hours=9)
-    print(kst.strftime('%Y-%m-%d %H:%M KST'))
-except: print('${utc_str}')
-"
-  else
-    echo "$utc_str"
-  fi
-}
-START_KST=$(utc_to_kst "$START")
-END_KST=$(utc_to_kst "$END")
-BENCH_S_KST=$(utc_to_kst "$BENCH_S")
-BENCH_E_KST=$(utc_to_kst "$BENCH_E")
+def to_kst(s):
+    if not s: return ''
+    try:
+        t = datetime.strptime(s.rstrip('Z'), '%Y-%m-%dT%H:%M:%S')
+        return (t + timedelta(hours=9)).strftime('%Y-%m-%d %H:%M KST')
+    except: return s
+print(to_kst('$START'), to_kst('$END'), to_kst('$BENCH_S'), to_kst('$BENCH_E'))
+")
 
 REPORT_FILE="${METRICS_DIR}/REPORT.md"
 
