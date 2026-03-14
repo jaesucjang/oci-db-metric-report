@@ -141,16 +141,14 @@ echo " Output     : $OUTPUT_DIR/"
 echo "============================================================"
 echo ""
 
-SUCCESS_COUNT=0
-FAIL_COUNT=0
-EMPTY_COUNT=0
+MAX_PARALLEL=${MAX_PARALLEL:-10}
+STATUS_DIR=$(mktemp -d)
 
-fetch_metric() {
+fetch_metric_worker() {
   local metric_name="$1"
   local query_text="$2"
   local out_prefix="$3"
 
-  echo -n "  Fetching ${metric_name}..."
   local OUTPUT
   OUTPUT=$(oci monitoring metric-data summarize-metrics-data \
     $OCI_CONFIG_ARG $OCI_PROFILE_ARG \
@@ -161,34 +159,32 @@ fetch_metric() {
     --output json 2>&1)
   local RC=$?
 
+  echo "$OUTPUT" > "${OUTPUT_DIR}/${out_prefix}.json"
+
   if [ $RC -ne 0 ]; then
-    echo " FAILED"
-    echo "    Error: $(echo "$OUTPUT" | head -3)"
-    echo "$OUTPUT" > "${OUTPUT_DIR}/${out_prefix}.json"
-    FAIL_COUNT=$((FAIL_COUNT + 1))
+    echo "FAIL" > "${STATUS_DIR}/${out_prefix}"
+    echo "  ${metric_name}... FAILED"
     return
   fi
 
-  echo "$OUTPUT" > "${OUTPUT_DIR}/${out_prefix}.json"
-
-  # JSON -> CSV
   local CSV_DATA
   CSV_DATA=$(jq -r '.data[0]."aggregated-datapoints"[]? | [.timestamp, .value] | @csv' \
     "${OUTPUT_DIR}/${out_prefix}.json" 2>/dev/null)
+  echo "$CSV_DATA" > "${OUTPUT_DIR}/${out_prefix}.csv"
 
   if [ -z "$CSV_DATA" ]; then
-    echo " OK (no data points)"
-    EMPTY_COUNT=$((EMPTY_COUNT + 1))
+    echo "EMPTY" > "${STATUS_DIR}/${out_prefix}"
+    echo "  ${metric_name}... OK (empty)"
   else
-    local POINTS
-    POINTS=$(echo "$CSV_DATA" | wc -l | tr -d ' ')
-    echo " OK ($POINTS points)"
-    SUCCESS_COUNT=$((SUCCESS_COUNT + 1))
+    local POINTS=$(echo "$CSV_DATA" | wc -l | tr -d ' ')
+    echo "SUCCESS" > "${STATUS_DIR}/${out_prefix}"
+    echo "  ${metric_name}... OK ($POINTS pts)"
   fi
-  echo "$CSV_DATA" > "${OUTPUT_DIR}/${out_prefix}.csv"
 }
 
-# --- PostgreSQL ---
+# --- Build job list: metric_name|query_text|out_prefix ---
+JOBS_LIST=()
+
 if [ "$NAMESPACE" = "oci_postgresql" ]; then
   METRICS=(CpuUtilization MemoryUtilization Connections BufferCacheHitRatio \
            Deadlocks TxidWrapLimit \
@@ -196,16 +192,12 @@ if [ "$NAMESPACE" = "oci_postgresql" ]; then
            ReadThroughput WriteThroughput \
            DataUsedStorage UsedStorage WalUsedStorage)
 
-  ROLES=(PRIMARY READ_REPLICA)
-
-  for ROLE in "${ROLES[@]}"; do
-    echo "--- ${ROLE} ---"
+  for ROLE in PRIMARY READ_REPLICA; do
     for M in "${METRICS[@]}"; do
-      fetch_metric "$M" "${M}[${INTERVAL}]{dbInstanceRole = \"${ROLE}\"}.mean()" "${ROLE}_${M}"
+      JOBS_LIST+=("${M}|${M}[${INTERVAL}]{dbInstanceRole = \"${ROLE}\"}.mean()|${ROLE}_${M}")
     done
   done
 
-# --- MySQL ---
 elif [ "$NAMESPACE" = "oci_mysql_database" ]; then
   METRICS=(CPUUtilization MemoryUtilization MemoryUsed MemoryAllocated \
            OCPUsUsed OCPUsAllocated \
@@ -217,10 +209,8 @@ elif [ "$NAMESPACE" = "oci_mysql_database" ]; then
            StorageUsed StorageAllocated \
            BackupSize BackupTime BackupFailure)
 
-  # Read Replica only metrics
   REPLICA_ONLY_METRICS=(ChannelLag ChannelFailure)
 
-  # Detect Read Replicas by checking ChannelLag metric
   REPLICA_NAMES=$(oci monitoring metric list \
     $OCI_CONFIG_ARG $OCI_PROFILE_ARG \
     --compartment-id "$COMPARTMENT_ID" \
@@ -228,47 +218,66 @@ elif [ "$NAMESPACE" = "oci_mysql_database" ]; then
     --name "ChannelLag" \
     --output json 2>/dev/null | jq -r '.data[].dimensions.resourceName // empty' 2>/dev/null | sort -u)
 
-  # Determine resource filter for Source DB System
-  # If replicas exist, we need to exclude them from Source queries
   SOURCE_FILTER=""
   if [ -n "${RESOURCE_NAME:-}" ]; then
     SOURCE_FILTER="{resourceName = \"${RESOURCE_NAME}\"}"
   fi
 
-  echo "--- MySQL Source DB System ---"
   for M in "${METRICS[@]}"; do
-    if [ -n "$SOURCE_FILTER" ]; then
-      fetch_metric "$M" "${M}[${INTERVAL}]${SOURCE_FILTER}.mean()" "$M"
-    else
-      fetch_metric "$M" "${M}[${INTERVAL}].mean()" "$M"
-    fi
+    JOBS_LIST+=("${M}|${M}[${INTERVAL}]${SOURCE_FILTER}.mean()|${M}")
   done
 
-  # Fetch Read Replica metrics
   if [ -n "$REPLICA_NAMES" ]; then
     for RNAME in $REPLICA_NAMES; do
-      echo ""
-      echo "--- MySQL Read Replica: ${RNAME} ---"
-      # Common metrics for replica
       for M in "${METRICS[@]}"; do
-        # Skip backup metrics for replicas
         case "$M" in BackupSize|BackupTime|BackupFailure) continue ;; esac
-        fetch_metric "REPLICA_${M}" "${M}[${INTERVAL}]{resourceName = \"${RNAME}\"}.mean()" "REPLICA_${M}"
+        JOBS_LIST+=("REPLICA_${M}|${M}[${INTERVAL}]{resourceName = \"${RNAME}\"}.mean()|REPLICA_${M}")
       done
-      # Replica-only metrics
       for M in "${REPLICA_ONLY_METRICS[@]}"; do
-        fetch_metric "REPLICA_${M}" "${M}[${INTERVAL}]{resourceName = \"${RNAME}\"}.mean()" "REPLICA_${M}"
+        JOBS_LIST+=("REPLICA_${M}|${M}[${INTERVAL}]{resourceName = \"${RNAME}\"}.mean()|REPLICA_${M}")
       done
     done
   else
     echo "  (No Read Replicas detected)"
   fi
-
 else
   echo "ERROR: Unknown namespace: $NAMESPACE"
   echo "Supported: oci_postgresql, oci_mysql_database"
   exit 1
 fi
+
+# --- Run all fetches in parallel ---
+TOTAL=${#JOBS_LIST[@]}
+echo "Fetching $TOTAL metrics (${MAX_PARALLEL} parallel)..."
+
+RUNNING_PIDS=()
+for JOB in "${JOBS_LIST[@]}"; do
+  IFS='|' read -r MNAME MQUERY MPREFIX <<< "$JOB"
+
+  fetch_metric_worker "$MNAME" "$MQUERY" "$MPREFIX" &
+  RUNNING_PIDS+=($!)
+
+  # Limit concurrency
+  while [ ${#RUNNING_PIDS[@]} -ge $MAX_PARALLEL ]; do
+    NEW_PIDS=()
+    for pid in "${RUNNING_PIDS[@]}"; do
+      if kill -0 "$pid" 2>/dev/null; then
+        NEW_PIDS+=("$pid")
+      fi
+    done
+    RUNNING_PIDS=("${NEW_PIDS[@]}")
+    [ ${#RUNNING_PIDS[@]} -ge $MAX_PARALLEL ] && sleep 0.1
+  done
+done
+
+# Wait for remaining
+wait
+
+# --- Aggregate results ---
+SUCCESS_COUNT=$(grep -rl "SUCCESS" "${STATUS_DIR}/" 2>/dev/null | wc -l | tr -d ' ')
+FAIL_COUNT=$(grep -rl "FAIL" "${STATUS_DIR}/" 2>/dev/null | wc -l | tr -d ' ')
+EMPTY_COUNT=$(grep -rl "EMPTY" "${STATUS_DIR}/" 2>/dev/null | wc -l | tr -d ' ')
+rm -rf "$STATUS_DIR"
 
 # --- Save metadata ---
 cat > "${OUTPUT_DIR}/_metadata.json" <<EOFMETA

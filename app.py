@@ -169,17 +169,31 @@ def run_job(job_id, config):
 
         jobs[job_id]["progress"] = 15
 
-        # --- Step 2: Fetch metrics ---
-        jobs[job_id]["log"] += "=== Step 1: Collecting metrics ===\n"
-        result = subprocess.run(
+        # --- Step 1: Fetch metrics (streaming progress) ---
+        jobs[job_id]["log"] += "=== Step 1: Collecting metrics (parallel) ===\n"
+        proc = subprocess.Popen(
             ["bash", os.path.join(SCRIPT_DIR, "fetch_metrics.sh"), config_path],
-            capture_output=True, text=True, timeout=300
+            stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, bufsize=1
         )
-        jobs[job_id]["log"] += result.stdout + result.stderr
-        if result.returncode != 0:
+        output_lines = []
+        metric_done = 0
+        for line in proc.stdout:
+            output_lines.append(line)
+            jobs[job_id]["log"] += line
+            # Count completed metrics for progress
+            if "... OK" in line or "... FAILED" in line:
+                metric_done += 1
+                # Progress: 15% to 48% during collection
+                jobs[job_id]["progress"] = min(48, 15 + int(metric_done * 0.8))
+                # Show current metric in status
+                metric_name = line.strip().split("...")[0].strip()
+                jobs[job_id]["collecting_metric"] = metric_name
+        proc.wait()
+        jobs[job_id].pop("collecting_metric", None)
+
+        if proc.returncode != 0:
             jobs[job_id]["status"] = "error"
-            # Parse specific error from output
-            output = result.stdout + result.stderr
+            output = "".join(output_lines)
             if "authentication failed" in output.lower() or "NotAuthenticated" in output:
                 jobs[job_id]["error"] = "OCI authentication failed. Check API key and config."
             elif "not found" in output.lower() and "config" in output.lower():
@@ -194,40 +208,42 @@ def run_job(job_id, config):
                 jobs[job_id]["error"] = "Metric collection failed. See log for details."
             return
 
-        # --- Step 1.5: Fetch DB system info ---
-        jobs[job_id]["log"] += "\n=== Step 1.5: Fetching DB system info ===\n"
-        try:
-            db_info_cmd = [
-                "python3", os.path.join(SCRIPT_DIR, "fetch_db_info.py"), metrics_dir,
-                "--config-file", oci_config_file,
-            ]
-            if oci_profile and oci_profile != "DEFAULT":
-                db_info_cmd += ["--profile", oci_profile]
-            result = subprocess.run(db_info_cmd, capture_output=True, text=True, timeout=60)
-            jobs[job_id]["log"] += result.stdout + result.stderr
-            if result.returncode != 0:
-                jobs[job_id]["log"] += "WARNING: DB info fetch failed (non-fatal)\n"
-        except Exception as e:
-            jobs[job_id]["log"] += f"WARNING: DB info fetch error: {e}\n"
-
+        # --- Step 2: DB Info + Charts (parallel) ---
         jobs[job_id]["status"] = "charting"
         jobs[job_id]["progress"] = 50
+        jobs[job_id]["log"] += "\n=== Step 2: DB Info + Charts (parallel) ===\n"
 
-        # --- Step 3: Generate charts ---
-        jobs[job_id]["log"] += "\n=== Step 2: Generating charts ===\n"
-        result = subprocess.run(
-            ["python3", os.path.join(SCRIPT_DIR, "generate_charts.py"), metrics_dir],
-            capture_output=True, text=True, timeout=120
-        )
-        jobs[job_id]["log"] += result.stdout + result.stderr
-        if result.returncode != 0:
+        db_info_cmd = [
+            "python3", os.path.join(SCRIPT_DIR, "fetch_db_info.py"), metrics_dir,
+            "--config-file", oci_config_file,
+        ]
+        if oci_profile and oci_profile != "DEFAULT":
+            db_info_cmd += ["--profile", oci_profile]
+        charts_cmd = [
+            "python3", os.path.join(SCRIPT_DIR, "generate_charts.py"), metrics_dir,
+        ]
+
+        # Launch both in parallel
+        proc_dbinfo = subprocess.Popen(db_info_cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
+        proc_charts = subprocess.Popen(charts_cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
+
+        # Wait for both
+        dbinfo_out, _ = proc_dbinfo.communicate(timeout=60)
+        charts_out, _ = proc_charts.communicate(timeout=120)
+
+        jobs[job_id]["log"] += f"[DB Info] {dbinfo_out}"
+        if proc_dbinfo.returncode != 0:
+            jobs[job_id]["log"] += "WARNING: DB info fetch failed (non-fatal)\n"
+
+        jobs[job_id]["log"] += f"[Charts] {charts_out}"
+        if proc_charts.returncode != 0:
             jobs[job_id]["status"] = "error"
             jobs[job_id]["error"] = "Chart generation failed."
             return
 
         jobs[job_id]["progress"] = 80
 
-        # --- Step 4: Generate markdown report ---
+        # --- Step 3: Generate markdown report ---
         jobs[job_id]["status"] = "reporting"
         jobs[job_id]["log"] += "\n=== Step 3: Generating report ===\n"
         result = subprocess.run(
@@ -452,6 +468,7 @@ def api_status(job_id):
         "progress": job["progress"],
         "error": job["error"],
         "stats": job["stats"],
+        "collecting_metric": job.get("collecting_metric", ""),
         "has_charts": job["metrics_dir"] is not None and os.path.exists(
             os.path.join(job["metrics_dir"], "chart_overview.png")
         ) if job["metrics_dir"] else False,

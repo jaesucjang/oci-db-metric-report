@@ -134,48 +134,30 @@ if [ -n "$BENCH_S" ] && [ "$BENCH_S" != "null" ]; then
 BENCHEOF
 fi
 
-# --- Environment section ---
+# --- Environment section (single jq call) ---
 DB_INFO_FILE="${METRICS_DIR}/_db_info.json"
-if [ -f "$DB_INFO_FILE" ] && [ "$(jq -r '.display_name // empty' "$DB_INFO_FILE" 2>/dev/null)" != "" ]; then
-  DB_NAME=$(jq -r '.display_name // "-"' "$DB_INFO_FILE")
-  DB_SHAPE=$(jq -r '.shape // "-"' "$DB_INFO_FILE")
-  DB_OCPU=$(jq -r '.ocpu_count // "-"' "$DB_INFO_FILE")
-  DB_MEM=$(jq -r '.memory_gb // "-"' "$DB_INFO_FILE")
-  DB_STOR=$(jq -r '.storage_gb // "-"' "$DB_INFO_FILE")
-  DB_VER=$(jq -r '.db_version // "-"' "$DB_INFO_FILE")
-  DB_HA=$(jq -r 'if .ha_enabled then "Yes" else "No" end' "$DB_INFO_FILE")
-  DB_STATE=$(jq -r '.lifecycle_state // "-"' "$DB_INFO_FILE")
-  DB_CFGNAME=$(jq -r '.configuration_name // "-"' "$DB_INFO_FILE")
+if [ -f "$DB_INFO_FILE" ]; then
+  ENV_SECTION=$(jq -r '
+    def val: . // "-";
+    if .display_name then
+      "---\n\n## 2. Environment\n\n| Item | Value |\n|------|-------|\n"
+      + "| DB System | \(.display_name | val) |\n"
+      + "| Shape | \(.shape | val) (\(.ocpu_count | val) OCPU / \(.memory_gb | val) GB) |\n"
+      + "| Storage | \(.storage_gb | val) GB |\n"
+      + "| DB Version | \(.db_version | val) |\n"
+      + "| HA | \(if .ha_enabled then "Yes" else "No" end) |\n"
+      + "| State | \(.lifecycle_state | val) |\n"
+      + "| Configuration | \(.configuration_name | val) |\n"
+      + (if (.parameters | length) > 0 then
+          "\n### Key Performance Parameters\n\n| Parameter | Value |\n|-----------|-------|\n"
+          + ([.parameters | to_entries | sort_by(.key)[] | "| \(.key) | \(.value) |"] | join("\n"))
+          + "\n"
+        else "" end)
+    else "" end
+  ' "$DB_INFO_FILE" 2>/dev/null)
 
-  cat >> "$REPORT_FILE" <<ENVEOF
-
----
-
-## 2. Environment
-
-| Item | Value |
-|------|-------|
-| DB System | ${DB_NAME} |
-| Shape | ${DB_SHAPE} (${DB_OCPU} OCPU / ${DB_MEM} GB) |
-| Storage | ${DB_STOR} GB |
-| DB Version | ${DB_VER} |
-| HA | ${DB_HA} |
-| State | ${DB_STATE} |
-| Configuration | ${DB_CFGNAME} |
-
-ENVEOF
-
-  # Configuration parameters
-  PARAM_COUNT=$(jq '.parameters | length' "$DB_INFO_FILE" 2>/dev/null || echo 0)
-  if [ "$PARAM_COUNT" != "0" ] && [ "$PARAM_COUNT" != "" ]; then
-    cat >> "$REPORT_FILE" <<PARAMHDR
-### Key Performance Parameters
-
-| Parameter | Value |
-|-----------|-------|
-PARAMHDR
-    jq -r '.parameters | to_entries | sort_by(.key)[] | "| \(.key) | \(.value) |"' "$DB_INFO_FILE" >> "$REPORT_FILE"
-    echo "" >> "$REPORT_FILE"
+  if [ -n "$ENV_SECTION" ]; then
+    printf "\n%b\n" "$ENV_SECTION" >> "$REPORT_FILE"
   fi
 fi
 

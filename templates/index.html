@@ -1318,11 +1318,15 @@ function pollStatus() {
 
     const labels = {
       queued: 'Queued...', collecting: 'Collecting metrics from OCI...',
-      charting: 'Generating charts...', reporting: 'Building report...',
+      charting: 'DB Info + Charts...',  reporting: 'Building report...',
       analyzing: 'AI Analysis (GenAI)...',
       done: 'Complete!', error: 'Error: ' + (s.error || ''),
     };
-    text.textContent = labels[s.status] || s.status;
+    let label = labels[s.status] || s.status;
+    if (s.status === 'collecting' && s.collecting_metric) {
+      label = 'Collecting: ' + s.collecting_metric + ' (' + s.progress + '%)';
+    }
+    text.textContent = label;
 
     // Update log
     fetch('/api/log/' + currentJobId).then(r => r.json()).then(l => {
