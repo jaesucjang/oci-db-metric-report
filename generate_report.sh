@@ -134,17 +134,6 @@ if [ -n "$BENCH_S" ] && [ "$BENCH_S" != "null" ]; then
 BENCHEOF
 fi
 
-# MySQL HA note
-if [ "$NS" = "oci_mysql_database" ]; then
-  cat >> "$REPORT_FILE" <<MYSQLNOTE
-
-> **참고 (HA vs Read Replica)**:
-> - **HA Standby**: 같은 DB System 내부의 Active-Standby. 메트릭이 노드별로 분리되지 않으며, DB System 단위(\`resourceName\`)로만 수집됨.
-> - **Read Replica**: 별도 리소스로 생성되며, 독립적인 \`resourceName\`으로 메트릭이 별도 수집됨.
-
-MYSQLNOTE
-fi
-
 cat >> "$REPORT_FILE" <<CHARTSEOF
 
 ---
@@ -264,6 +253,17 @@ elif [ "$NS" = "oci_postgresql" ]; then
 | 14 | UsedStorage | Storage | Total used storage (bytes) |
 | 15 | WalUsedStorage | Storage | WAL used storage (bytes) |
 PGEOF
+fi
+
+# MySQL HA note (at bottom)
+if [ "$NS" = "oci_mysql_database" ]; then
+  cat >> "$REPORT_FILE" <<MYSQLNOTE
+
+> **[참고] MySQL HA vs Read Replica**:
+> MySQL HA Standby는 DB System 내부 Active-Standby로, 메트릭이 노드별 분리되지 않고 DB System 단위(\`resourceName\`)로 수집됩니다.
+> Read Replica는 별도 리소스로 독립적인 \`resourceName\`으로 메트릭이 별도 수집됩니다.
+
+MYSQLNOTE
 fi
 
 # --- Footer ---

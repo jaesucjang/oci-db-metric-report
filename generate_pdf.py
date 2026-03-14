@@ -162,17 +162,6 @@ def generate_pdf(metrics_dir):
         pdf.cell(5, 8, ":")
         pdf.cell(CONTENT_W - 45, 8, f"  {val}", new_x="LMARGIN", new_y="NEXT")
 
-    # MySQL HA note
-    if "mysql" in ns.lower():
-        pdf.ln(8)
-        font("I", 8)
-        pdf.set_text_color(80, 80, 80)
-        pdf.multi_cell(CONTENT_W, 5,
-            "[참고] MySQL HA Standby는 DB System 내부 Active-Standby로, "
-            "메트릭이 노드별 분리되지 않고 DB System 단위(resourceName)로 수집됩니다. "
-            "Read Replica는 별도 리소스로 독립적인 resourceName으로 메트릭이 별도 수집됩니다.")
-        pdf.set_text_color(0, 0, 0)
-
     # ================================================================
     # 2. Charts (portrait, split tall images across pages)
     # ================================================================
@@ -304,6 +293,19 @@ def generate_pdf(metrics_dir):
         # Flush remaining table
         if table_rows:
             _render_table(pdf, table_rows, CONTENT_W, MARGIN)
+
+    # ================================================================
+    # MySQL HA note (at bottom)
+    # ================================================================
+    if "mysql" in ns.lower():
+        pdf.ln(10)
+        font("I", 8)
+        pdf.set_text_color(80, 80, 80)
+        pdf.multi_cell(CONTENT_W, 5,
+            "[참고] MySQL HA Standby는 DB System 내부 Active-Standby로, "
+            "메트릭이 노드별 분리되지 않고 DB System 단위(resourceName)로 수집됩니다. "
+            "Read Replica는 별도 리소스로 독립적인 resourceName으로 메트릭이 별도 수집됩니다.")
+        pdf.set_text_color(0, 0, 0)
 
     # ================================================================
     # Footer
