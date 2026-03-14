@@ -163,15 +163,52 @@ def generate_pdf(metrics_dir):
         pdf.cell(CONTENT_W - 45, 8, f"  {val}", new_x="LMARGIN", new_y="NEXT")
 
     # ================================================================
-    # 2. Charts (portrait, auto page break for tall images)
+    # 2. Charts (portrait, split tall images across pages)
     # ================================================================
     for label, img_path in charts:
-        pdf.add_page()
-        heading(f"Chart: {label}", 13)
         try:
-            # Let fpdf2 handle page breaks for tall images
-            pdf.image(img_path, x=MARGIN, w=CONTENT_W)
+            from PIL import Image as PILImage
+            img = PILImage.open(img_path)
+            img_w_px, img_h_px = img.size
+
+            # Scale to content width
+            scale = CONTENT_W / img_w_px
+            img_h_mm = img_h_px * scale
+            page_avail = 297 - MARGIN * 2 - 25  # A4 height minus margins and heading
+
+            if img_h_mm <= page_avail:
+                # Fits on one page
+                pdf.add_page()
+                heading(f"Chart: {label}", 13)
+                pdf.image(img_path, x=MARGIN, w=CONTENT_W)
+            else:
+                # Split image into page-sized chunks
+                chunk_h_px = int(page_avail / scale)
+                page_num = 1
+                y_offset = 0
+                while y_offset < img_h_px:
+                    pdf.add_page()
+                    remaining = img_h_px - y_offset
+                    this_chunk_h = min(chunk_h_px, remaining)
+
+                    if page_num == 1:
+                        heading(f"Chart: {label}", 13)
+                    else:
+                        heading(f"Chart: {label} (cont.)", 13)
+
+                    # Crop this chunk
+                    crop_box = (0, y_offset, img_w_px, y_offset + this_chunk_h)
+                    chunk = img.crop(crop_box)
+                    chunk_path = img_path.replace(".png", f"_chunk{page_num}.png")
+                    chunk.save(chunk_path)
+                    pdf.image(chunk_path, x=MARGIN, w=CONTENT_W)
+                    os.remove(chunk_path)
+
+                    y_offset += this_chunk_h
+                    page_num += 1
         except Exception as e:
+            pdf.add_page()
+            heading(f"Chart: {label}", 13)
             font("", 9)
             pdf.cell(CONTENT_W, 8, f"(Image error: {e})", new_x="LMARGIN", new_y="NEXT")
 
