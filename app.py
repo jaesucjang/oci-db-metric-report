@@ -224,6 +224,9 @@ def run_job(job_id, config):
         jobs[job_id]["status"] = "done"
         jobs[job_id]["metrics_dir"] = metrics_dir
 
+        # Save to recent configs only on success
+        save_recent_config(config)
+
         # Parse stats
         stats_path = os.path.join(metrics_dir, "stats_summary.csv")
         if os.path.exists(stats_path):
@@ -390,9 +393,6 @@ def api_run():
         "metrics_dir": None,
         "created_at": datetime.now(timezone.utc).isoformat(),
     }
-
-    # Save to recent configs
-    save_recent_config(data)
 
     t = threading.Thread(target=run_job, args=(job_id, data), daemon=True)
     t.start()
