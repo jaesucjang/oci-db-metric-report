@@ -288,6 +288,20 @@
             </select>
           </div>
           <div class="form-group">
+            <label>Resource Name</label>
+            <div style="display:flex;gap:6px;align-items:center">
+              <select name="resource_name" id="resourceSelect" style="flex:1">
+                <option value="">(전체 - 자동)</option>
+              </select>
+              <button type="button" class="btn" id="loadResourcesBtn" style="padding:6px 12px;font-size:12px;white-space:nowrap">조회</button>
+            </div>
+            <span class="hint">Compartment/Namespace 입력 후 [조회] 클릭</span>
+          </div>
+          <div class="form-group full">
+            <label>Report Title</label>
+            <input type="text" name="report_title" value="OCI DB Metric Report">
+          </div>
+          <div class="form-group">
             <label>Interval</label>
             <select name="interval">
               <option value="1m" selected>1 min</option>
@@ -336,20 +350,6 @@
             <label>End Time (KST) <span class="required">*</span></label>
             <input type="datetime-local" name="end_time" id="inputEndTime" required>
             <span class="hint">타임라인 드래그 또는 직접 입력</span>
-          </div>
-          <div class="form-group">
-            <label>Resource Name</label>
-            <div style="display:flex;gap:6px;align-items:center">
-              <select name="resource_name" id="resourceSelect" style="flex:1">
-                <option value="">(전체 - 자동)</option>
-              </select>
-              <button type="button" class="btn" id="loadResourcesBtn" style="padding:6px 12px;font-size:12px;white-space:nowrap">조회</button>
-            </div>
-            <span class="hint">Compartment/Namespace 입력 후 [조회] 클릭</span>
-          </div>
-          <div class="form-group">
-            <label>Report Title</label>
-            <input type="text" name="report_title" value="OCI DB Metric Report">
           </div>
         </div>
         <div class="actions">
