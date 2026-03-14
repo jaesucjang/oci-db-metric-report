@@ -337,7 +337,12 @@
             <input type="datetime-local" name="end_time" id="inputEndTime" required>
             <span class="hint">타임라인 드래그 또는 직접 입력</span>
           </div>
-          <div class="form-group full">
+          <div class="form-group">
+            <label>Resource Name</label>
+            <input type="text" name="resource_name" placeholder="e.g., mysql20260314120334">
+            <span class="hint">MySQL Source DB 이름 (Replica 자동 감지용, 선택)</span>
+          </div>
+          <div class="form-group">
             <label>Report Title</label>
             <input type="text" name="report_title" value="OCI DB Metric Report">
           </div>

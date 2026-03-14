@@ -217,10 +217,52 @@ elif [ "$NAMESPACE" = "oci_mysql_database" ]; then
            StorageUsed StorageAllocated \
            BackupSize BackupTime BackupFailure)
 
-  echo "--- MySQL DB System ---"
+  # Read Replica only metrics
+  REPLICA_ONLY_METRICS=(ChannelLag ChannelFailure)
+
+  # Detect Read Replicas by checking ChannelLag metric
+  REPLICA_NAMES=$(oci monitoring metric list \
+    $OCI_CONFIG_ARG $OCI_PROFILE_ARG \
+    --compartment-id "$COMPARTMENT_ID" \
+    --namespace "$NAMESPACE" \
+    --name "ChannelLag" \
+    --output json 2>/dev/null | jq -r '.data[].dimensions.resourceName // empty' 2>/dev/null | sort -u)
+
+  # Determine resource filter for Source DB System
+  # If replicas exist, we need to exclude them from Source queries
+  SOURCE_FILTER=""
+  if [ -n "${RESOURCE_NAME:-}" ]; then
+    SOURCE_FILTER="{resourceName = \"${RESOURCE_NAME}\"}"
+  fi
+
+  echo "--- MySQL Source DB System ---"
   for M in "${METRICS[@]}"; do
-    fetch_metric "$M" "${M}[${INTERVAL}].mean()" "$M"
+    if [ -n "$SOURCE_FILTER" ]; then
+      fetch_metric "$M" "${M}[${INTERVAL}]${SOURCE_FILTER}.mean()" "$M"
+    else
+      fetch_metric "$M" "${M}[${INTERVAL}].mean()" "$M"
+    fi
   done
+
+  # Fetch Read Replica metrics
+  if [ -n "$REPLICA_NAMES" ]; then
+    for RNAME in $REPLICA_NAMES; do
+      echo ""
+      echo "--- MySQL Read Replica: ${RNAME} ---"
+      # Common metrics for replica
+      for M in "${METRICS[@]}"; do
+        # Skip backup metrics for replicas
+        case "$M" in BackupSize|BackupTime|BackupFailure) continue ;; esac
+        fetch_metric "REPLICA_${M}" "${M}[${INTERVAL}]{resourceName = \"${RNAME}\"}.mean()" "REPLICA_${M}"
+      done
+      # Replica-only metrics
+      for M in "${REPLICA_ONLY_METRICS[@]}"; do
+        fetch_metric "REPLICA_${M}" "${M}[${INTERVAL}]{resourceName = \"${RNAME}\"}.mean()" "REPLICA_${M}"
+      done
+    done
+  else
+    echo "  (No Read Replicas detected)"
+  fi
 
 else
   echo "ERROR: Unknown namespace: $NAMESPACE"

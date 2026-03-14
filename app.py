@@ -163,6 +163,7 @@ def run_job(job_id, config):
             f.write(f'END_TIME="{config["end_time"]}"\n')
             f.write(f'BENCH_START="{config.get("bench_start", "")}"\n')
             f.write(f'BENCH_END="{config.get("bench_end", "")}"\n')
+            f.write(f'RESOURCE_NAME="{config.get("resource_name", "")}"\n')
             f.write(f'REPORT_TITLE="{config.get("report_title", "OCI DB Metric Report")}"\n')
             f.write(f'OUTPUT_DIR="{metrics_dir}"\n')
 

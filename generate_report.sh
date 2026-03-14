@@ -234,6 +234,14 @@ if [ "$NS" = "oci_mysql_database" ]; then
 | 20 | BackupSize | Backup | Backup size (bytes) |
 | 21 | BackupTime | Backup | Backup duration (seconds) |
 | 22 | BackupFailure | Backup | Backup failure count |
+
+**Read Replica Metrics** (Replica가 있는 경우 자동 수집)
+
+| # | Metric Name | Category | Description |
+|---|-------------|----------|-------------|
+| 1 | REPLICA_ChannelLag | Replication | Replication lag (seconds) |
+| 2 | REPLICA_ChannelFailure | Replication | Replication channel failure |
+| 3-19 | REPLICA_* | (Same as Source) | Source와 동일 메트릭 (Backup 제외) |
 MYSQLEOF
 
 elif [ "$NS" = "oci_postgresql" ]; then

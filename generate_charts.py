@@ -77,6 +77,26 @@ MYSQL_CATEGORIES = {
         "colors": ["#3498db", "#95a5a6"],
         "desc": ["Used (GB)", "Allocated (GB)"],
     },
+    "Replica - Performance (%)": {
+        "metrics": ["REPLICA_CPUUtilization", "REPLICA_MemoryUtilization"],
+        "colors": ["#c0392b", "#2980b9"],
+        "desc": ["Replica CPU", "Replica Memory"],
+    },
+    "Replica - Replication": {
+        "metrics": ["REPLICA_ChannelLag", "REPLICA_ChannelFailure"],
+        "colors": ["#e67e22", "#e74c3c"],
+        "desc": ["Channel Lag (s)", "Channel Failure"],
+    },
+    "Replica - Connections": {
+        "metrics": ["REPLICA_ActiveConnections", "REPLICA_CurrentConnections"],
+        "colors": ["#e67e22", "#9b59b6"],
+        "desc": ["Active", "Current"],
+    },
+    "Replica - Disk IOPS": {
+        "metrics": ["REPLICA_DbVolumeReadOperations", "REPLICA_DbVolumeWriteOperations"],
+        "colors": ["#3498db", "#e74c3c"],
+        "desc": ["Read IOPS", "Write IOPS"],
+    },
 }
 
 PG_CATEGORIES = {
@@ -655,6 +675,36 @@ def analyze_metrics(metrics, namespace):
             findings.append(f"{severity_icon('critical')} Deadlock 감지: 최대 {deadlocks['max']:.0f}회")
             recommendations.append("- 트랜잭션 순서 재설계")
             recommendations.append("- Lock timeout 및 deadlock 로그 분석")
+
+    # ---- Replica Analysis (MySQL) ----
+    if is_mysql:
+        replica_lag = get_stat(metrics, "REPLICA_ChannelLag")
+        replica_fail = get_stat(metrics, "REPLICA_ChannelFailure")
+        replica_cpu = get_stat(metrics, "REPLICA_CPUUtilization")
+        if replica_lag or replica_fail or replica_cpu:
+            lines.append("### 6. Read Replica\n")
+            lines.append(f"| Metric | Mean | Max | P95 |")
+            lines.append(f"|--------|------|-----|-----|")
+            if replica_cpu:
+                lines.append(f"| Replica CPU | {replica_cpu['mean']:.1f}% | {replica_cpu['max']:.1f}% | {replica_cpu['p95']:.1f}% |")
+            if replica_lag:
+                lines.append(f"| Channel Lag (s) | {replica_lag['mean']:.2f} | {replica_lag['max']:.2f} | {replica_lag['p95']:.2f} |")
+            if replica_fail:
+                lines.append(f"| Channel Failure | {replica_fail['mean']:.0f} | {replica_fail['max']:.0f} | - |")
+            lines.append("")
+
+            if replica_fail and replica_fail["max"] > 0:
+                findings.append(f"{severity_icon('critical')} Replica 복제 실패 감지 — Channel Failure = {replica_fail['max']:.0f}")
+                recommendations.append("- **즉시 복제 상태 점검**: `SHOW REPLICA STATUS` 확인")
+                recommendations.append("- 복제 채널 재시작 또는 Replica 재생성 검토")
+            if replica_lag and replica_lag["p95"] > 10:
+                findings.append(f"{severity_icon('warning')} Replica 복제 지연 P95 {replica_lag['p95']:.1f}s — Source 대비 데이터 불일치 가능")
+                recommendations.append("- Source 쓰기 부하 분산 또는 Replica Shape 업그레이드")
+            elif replica_lag and replica_lag["max"] > 5:
+                findings.append(f"{severity_icon('warning')} Replica 복제 지연 최대 {replica_lag['max']:.1f}s")
+            elif replica_lag:
+                findings.append(f"{severity_icon('good')} Replica 복제 지연 평균 {replica_lag['mean']:.2f}s — 정상")
+            lines.append("")
 
     # ---- 7. Storage ----
     if is_mysql:
