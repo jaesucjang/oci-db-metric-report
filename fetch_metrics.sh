@@ -280,6 +280,7 @@ cat > "${OUTPUT_DIR}/_metadata.json" <<EOFMETA
   "interval": "$INTERVAL",
   "bench_start": "${BENCH_START:-}",
   "bench_end": "${BENCH_END:-}",
+  "resource_name": "${RESOURCE_NAME:-}",
   "report_title": "${REPORT_TITLE:-OCI DB Metric Report}",
   "collected_at": "$(date -u +%Y-%m-%dT%H:%M:%SZ)",
   "oci_profile": "${OCI_PROFILE:-DEFAULT}"

@@ -194,6 +194,22 @@ def run_job(job_id, config):
                 jobs[job_id]["error"] = "Metric collection failed. See log for details."
             return
 
+        # --- Step 1.5: Fetch DB system info ---
+        jobs[job_id]["log"] += "\n=== Step 1.5: Fetching DB system info ===\n"
+        try:
+            db_info_cmd = [
+                "python3", os.path.join(SCRIPT_DIR, "fetch_db_info.py"), metrics_dir,
+                "--config-file", oci_config_file,
+            ]
+            if oci_profile and oci_profile != "DEFAULT":
+                db_info_cmd += ["--profile", oci_profile]
+            result = subprocess.run(db_info_cmd, capture_output=True, text=True, timeout=60)
+            jobs[job_id]["log"] += result.stdout + result.stderr
+            if result.returncode != 0:
+                jobs[job_id]["log"] += "WARNING: DB info fetch failed (non-fatal)\n"
+        except Exception as e:
+            jobs[job_id]["log"] += f"WARNING: DB info fetch error: {e}\n"
+
         jobs[job_id]["status"] = "charting"
         jobs[job_id]["progress"] = 50
 

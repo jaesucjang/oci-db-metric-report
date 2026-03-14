@@ -126,18 +126,33 @@ def generate_pdf(metrics_dir):
         pdf.line(MARGIN, pdf.get_y(), PAGE_W - MARGIN, pdf.get_y())
         pdf.ln(3)
 
+    # Read DB info
+    db_info = {}
+    db_info_path = os.path.join(metrics_dir, "_db_info.json")
+    if os.path.isfile(db_info_path):
+        with open(db_info_path) as f:
+            db_info = json.load(f)
+
     # ================================================================
     # 1. Title Page
     # ================================================================
     pdf.add_page()
-    pdf.ln(50)
+    pdf.ln(40)
     font("B", 24)
     title = meta.get("report_title", "OCI DB Metric Report")
     pdf.cell(CONTENT_W, 14, title, new_x="LMARGIN", new_y="NEXT", align="C")
-    pdf.ln(6)
+    pdf.ln(4)
+
+    # DB System name subtitle
+    db_name = db_info.get("display_name", "")
+    if db_name:
+        font("", 14)
+        pdf.set_text_color(80, 80, 80)
+        pdf.cell(CONTENT_W, 10, db_name, new_x="LMARGIN", new_y="NEXT", align="C")
+        pdf.set_text_color(0, 0, 0)
 
     separator()
-    pdf.ln(8)
+    pdf.ln(6)
 
     font("", 11)
     ns = meta.get("namespace", "")
@@ -145,22 +160,84 @@ def generate_pdf(metrics_dir):
     end_kst = utc_to_kst(meta.get("end_time", ""))
     collected = meta.get("collected_at", "")
     interval_val = meta.get("interval", "1m")
-    profile = meta.get("oci_profile", "DEFAULT")
 
-    # Info table (key-value, centered)
+    # Build info table with DB system details
+    db_type = db_info.get("db_type", "MySQL" if "mysql" in ns.lower() else "PostgreSQL")
+    shape = db_info.get("shape", "")
+    ocpu = db_info.get("ocpu_count", "")
+    mem_gb = db_info.get("memory_gb", "")
+    db_ver = db_info.get("db_version", "")
+    ha = "Yes" if db_info.get("ha_enabled") else "No"
+    storage = db_info.get("storage_gb", "")
+
     info = [
-        ("Namespace", ns),
-        ("Period", f"{start_kst}  ~  {end_kst}"),
+        ("DB System", db_name or "-"),
+        ("DB Type", f"{db_type} {db_ver}" if db_ver else db_type),
+        ("Shape", f"{shape} ({ocpu} OCPU / {mem_gb} GB)" if shape else "-"),
+        ("Storage", f"{storage} GB" if storage else "-"),
+        ("HA", ha),
+        ("Monitoring", f"{start_kst}  ~  {end_kst}"),
         ("Interval", interval_val),
-        ("OCI Profile", profile),
         ("Generated", collected),
     ]
     for label, val in info:
-        font("B", 10)
-        pdf.cell(40, 8, label, align="R")
-        font("", 10)
-        pdf.cell(5, 8, ":")
-        pdf.cell(CONTENT_W - 45, 8, f"  {val}", new_x="LMARGIN", new_y="NEXT")
+        if val and val != "-":
+            font("B", 10)
+            pdf.cell(40, 8, label, align="R")
+            font("", 10)
+            pdf.cell(5, 8, ":")
+            pdf.cell(CONTENT_W - 45, 8, f"  {val}", new_x="LMARGIN", new_y="NEXT")
+
+    # ================================================================
+    # 1.5 Environment - Configuration Parameters
+    # ================================================================
+    params = db_info.get("parameters", {})
+    if params:
+        pdf.add_page()
+        heading("Environment - Key Configuration Parameters")
+
+        cfg_name = db_info.get("configuration_name", "")
+        if cfg_name:
+            font("", 9)
+            pdf.cell(CONTENT_W, 7, f"Configuration: {cfg_name}", new_x="LMARGIN", new_y="NEXT")
+            pdf.ln(4)
+
+        # Render parameters as table
+        param_rows = [["Parameter", "Value"]]
+        for k in sorted(params.keys()):
+            v = params[k]
+            # Format large numbers
+            try:
+                num = int(v)
+                if num >= 1073741824:
+                    v = f"{v} ({num / 1073741824:.1f} GB)"
+                elif num >= 1048576:
+                    v = f"{v} ({num / 1048576:.0f} MB)"
+                elif num >= 1024:
+                    v = f"{v} ({num / 1024:.0f} KB)"
+            except (ValueError, TypeError):
+                pass
+            param_rows.append([k, v])
+
+        # Render as table
+        col_w = [CONTENT_W * 0.45, CONTENT_W * 0.55]
+        for row_idx, cells in enumerate(param_rows):
+            if row_idx == 0:
+                font("B", 9)
+                pdf.set_fill_color(45, 55, 72)
+                pdf.set_text_color(255, 255, 255)
+                for i, c in enumerate(cells):
+                    pdf.cell(col_w[i], 7, c, border=1, fill=True, align="C")
+                pdf.ln()
+                pdf.set_text_color(0, 0, 0)
+            else:
+                font("", 8.5)
+                fill = row_idx % 2 == 0
+                if fill:
+                    pdf.set_fill_color(245, 247, 250)
+                for i, c in enumerate(cells):
+                    pdf.cell(col_w[i], 6.5, c, border=1, fill=fill, align="L")
+                pdf.ln()
 
     # ================================================================
     # 2. Charts (portrait, split tall images across pages)

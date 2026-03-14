@@ -134,17 +134,62 @@ if [ -n "$BENCH_S" ] && [ "$BENCH_S" != "null" ]; then
 BENCHEOF
 fi
 
+# --- Environment section ---
+DB_INFO_FILE="${METRICS_DIR}/_db_info.json"
+if [ -f "$DB_INFO_FILE" ] && [ "$(jq -r '.display_name // empty' "$DB_INFO_FILE" 2>/dev/null)" != "" ]; then
+  DB_NAME=$(jq -r '.display_name // "-"' "$DB_INFO_FILE")
+  DB_SHAPE=$(jq -r '.shape // "-"' "$DB_INFO_FILE")
+  DB_OCPU=$(jq -r '.ocpu_count // "-"' "$DB_INFO_FILE")
+  DB_MEM=$(jq -r '.memory_gb // "-"' "$DB_INFO_FILE")
+  DB_STOR=$(jq -r '.storage_gb // "-"' "$DB_INFO_FILE")
+  DB_VER=$(jq -r '.db_version // "-"' "$DB_INFO_FILE")
+  DB_HA=$(jq -r 'if .ha_enabled then "Yes" else "No" end' "$DB_INFO_FILE")
+  DB_STATE=$(jq -r '.lifecycle_state // "-"' "$DB_INFO_FILE")
+  DB_CFGNAME=$(jq -r '.configuration_name // "-"' "$DB_INFO_FILE")
+
+  cat >> "$REPORT_FILE" <<ENVEOF
+
+---
+
+## 2. Environment
+
+| Item | Value |
+|------|-------|
+| DB System | ${DB_NAME} |
+| Shape | ${DB_SHAPE} (${DB_OCPU} OCPU / ${DB_MEM} GB) |
+| Storage | ${DB_STOR} GB |
+| DB Version | ${DB_VER} |
+| HA | ${DB_HA} |
+| State | ${DB_STATE} |
+| Configuration | ${DB_CFGNAME} |
+
+ENVEOF
+
+  # Configuration parameters
+  PARAM_COUNT=$(jq '.parameters | length' "$DB_INFO_FILE" 2>/dev/null || echo 0)
+  if [ "$PARAM_COUNT" != "0" ] && [ "$PARAM_COUNT" != "" ]; then
+    cat >> "$REPORT_FILE" <<PARAMHDR
+### Key Performance Parameters
+
+| Parameter | Value |
+|-----------|-------|
+PARAMHDR
+    jq -r '.parameters | to_entries | sort_by(.key)[] | "| \(.key) | \(.value) |"' "$DB_INFO_FILE" >> "$REPORT_FILE"
+    echo "" >> "$REPORT_FILE"
+  fi
+fi
+
 cat >> "$REPORT_FILE" <<CHARTSEOF
 
 ---
 
-## 2. Charts
+## 3. Charts
 
-### 2-1. Overview (All metrics by category)
+### 3-1. Overview (All metrics by category)
 
 ![Overview](chart_overview.png)
 
-### 2-2. Individual Metric Details
+### 3-2. Individual Metric Details
 
 ![Detail](chart_detail.png)
 
@@ -152,7 +197,7 @@ CHARTSEOF
 
 if [ -n "$BENCH_S" ] && [ "$BENCH_S" != "null" ]; then
   cat >> "$REPORT_FILE" <<ZOOMEOF
-### 2-3. Benchmark Zoom-in
+### 3-3. Benchmark Zoom-in
 
 ![Zoom](chart_zoom.png)
 
@@ -164,7 +209,7 @@ cat >> "$REPORT_FILE" <<STATSHEADER
 
 ---
 
-## 3. Statistics Summary
+## 4. Statistics Summary
 
 | Metric | Mean | Max | Min | P95 | Std |
 |--------|------|-----|-----|-----|-----|
@@ -182,7 +227,7 @@ if [ -f "${METRICS_DIR}/analysis.md" ]; then
 
 ---
 
-## 4. Bottleneck Analysis & Recommendations
+## 5. Bottleneck Analysis & Recommendations
 
 ANALYSISHDR
   cat "${METRICS_DIR}/analysis.md" >> "$REPORT_FILE"
@@ -193,7 +238,7 @@ cat >> "$REPORT_FILE" <<LISTEOF
 
 ---
 
-## 5. Collected Metrics
+## 6. Collected Metrics
 
 LISTEOF
 
