@@ -1001,20 +1001,20 @@ function loadCompartments(parentId, targetSelect, clearLevels) {
     headers: {'Content-Type': 'application/json'},
     body: JSON.stringify({parent_id: parentId, oci_profile_id: getProfileId()}),
   }).then(r => r.json()).then(res => {
-    if (res.error) {
-      targetSelect.innerHTML = '<option value="">조회 실패</option>';
-      alert('조회 실패: ' + res.error);
+    if (res.error || !res.compartments || res.compartments.length === 0) {
+      // 최하위 Compartment이거나 에러 → 드롭다운 숨기고 상위 선택 유지
+      targetSelect.style.display = 'none';
+      targetSelect.innerHTML = '<option value="">-- 하위 Compartment --</option>';
+      updateCompartmentId();
       return;
     }
     targetSelect.innerHTML = '<option value="">(이 Compartment 사용)</option>';
-    if (res.compartments && res.compartments.length > 0) {
-      res.compartments.forEach(c => {
-        const opt = document.createElement('option');
-        opt.value = c.id;
-        opt.textContent = c.name;
-        targetSelect.appendChild(opt);
-      });
-    }
+    res.compartments.forEach(c => {
+      const opt = document.createElement('option');
+      opt.value = c.id;
+      opt.textContent = c.name;
+      targetSelect.appendChild(opt);
+    });
   }).catch(err => {
     targetSelect.innerHTML = '<option value="">오류</option>';
     alert('조회 오류: ' + err);
