@@ -253,13 +253,14 @@ def index():
 
 @app.route("/api/resources", methods=["POST"])
 def api_resources():
-    """List DB resource names across both namespaces in a compartment."""
+    """List DB resource names in a compartment for the given namespace."""
     data = request.json or {}
     compartment_id = data.get("compartment_id", "")
+    namespace = data.get("namespace", "")
     profile_id = data.get("oci_profile_id", "")
 
-    if not compartment_id:
-        return jsonify({"error": "compartment_id required"}), 400
+    if not compartment_id or not namespace:
+        return jsonify({"error": "compartment_id and namespace required"}), 400
 
     # Build OCI CLI args
     oci_args = []
@@ -268,34 +269,35 @@ def api_resources():
         if config_path:
             oci_args += ["--config-file", config_path]
 
-    all_resources = []  # list of {name, namespace}
+    cmd = [
+        "oci", "monitoring", "metric", "list",
+        *oci_args,
+        "--compartment-id", compartment_id,
+        "--namespace", namespace,
+        "--output", "json",
+    ]
 
-    for ns in ["oci_mysql_database", "oci_postgresql"]:
-        cmd = [
-            "oci", "monitoring", "metric", "list",
-            *oci_args,
-            "--compartment-id", compartment_id,
-            "--namespace", ns,
-            "--output", "json",
-        ]
-        try:
-            result = subprocess.run(cmd, capture_output=True, text=True, timeout=30)
-            if result.returncode != 0:
-                continue
-            metrics_data = json.loads(result.stdout).get("data", [])
-            seen = set()
-            for m in metrics_data:
-                dims = m.get("dimensions", {})
-                rname = dims.get("resourceName", "")
-                rid = dims.get("resourceId", "")
-                if rname and rname not in seen and "backup" not in rname.lower() and "backup" not in rid.lower():
-                    seen.add(rname)
-                    all_resources.append({"name": rname, "namespace": ns})
-        except Exception:
-            continue
+    try:
+        result = subprocess.run(cmd, capture_output=True, text=True, timeout=30)
+        if result.returncode != 0:
+            return jsonify({"error": result.stderr[:300]}), 500
 
-    all_resources.sort(key=lambda x: x["name"])
-    return jsonify({"resources": all_resources})
+        metrics_data = json.loads(result.stdout).get("data", [])
+        seen = set()
+        resources = []
+        for m in metrics_data:
+            dims = m.get("dimensions", {})
+            rname = dims.get("resourceName", "")
+            rid = dims.get("resourceId", "")
+            if rname and rname not in seen and "backup" not in rname.lower() and "backup" not in rid.lower():
+                seen.add(rname)
+                resources.append(rname)
+
+        return jsonify({"resources": sorted(resources)})
+    except subprocess.TimeoutExpired:
+        return jsonify({"error": "OCI CLI timeout"}), 504
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
 
 
 @app.route("/api/run", methods=["POST"])
