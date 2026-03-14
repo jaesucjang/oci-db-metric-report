@@ -162,6 +162,18 @@ def generate_pdf(metrics_dir):
         pdf.cell(5, 8, ":")
         pdf.cell(CONTENT_W - 45, 8, f"  {val}", new_x="LMARGIN", new_y="NEXT")
 
+    # MySQL HA note
+    if "mysql" in ns.lower():
+        pdf.ln(8)
+        font("I", 8)
+        pdf.set_text_color(80, 80, 80)
+        pdf.multi_cell(CONTENT_W, 5,
+            "[참고] MySQL HA는 Active-Standby 구성으로, PostgreSQL과 달리 "
+            "개별 노드(Primary/Standby) dimension이 메트릭에 노출되지 않습니다. "
+            "모든 메트릭은 DB System 단위(resourceName)로 수집됩니다. "
+            "Standby 노드는 자동 Failover 용도이며 Read Endpoint는 미활성 상태입니다.")
+        pdf.set_text_color(0, 0, 0)
+
     # ================================================================
     # 2. Charts (portrait, split tall images across pages)
     # ================================================================

@@ -134,6 +134,17 @@ if [ -n "$BENCH_S" ] && [ "$BENCH_S" != "null" ]; then
 BENCHEOF
 fi
 
+# MySQL HA note
+if [ "$NS" = "oci_mysql_database" ]; then
+  cat >> "$REPORT_FILE" <<MYSQLNOTE
+
+> **참고**: MySQL HA는 Active-Standby 구성으로, PostgreSQL과 달리 개별 노드(Primary/Standby) dimension이 메트릭에 노출되지 않습니다.
+> 모든 메트릭은 DB System 단위(\`resourceName\`)로 수집됩니다.
+> Standby 노드는 자동 Failover 용도이며 Read Endpoint는 미활성 상태입니다.
+
+MYSQLNOTE
+fi
+
 cat >> "$REPORT_FILE" <<CHARTSEOF
 
 ---
