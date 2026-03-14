@@ -27,11 +27,47 @@ PG_KEY_PARAMS = {
 }
 
 
-def extract_resource_id(metrics_dir):
-    """Extract resourceId from any collected metric JSON file."""
-    for jf in glob(os.path.join(metrics_dir, "*.json")):
-        if os.path.basename(jf).startswith("_"):
+def extract_resource_id(metrics_dir, metadata=None):
+    """Extract resourceId from collected metric JSON files.
+    Prioritize Source DB (non-replica) files over replica files.
+    """
+    # Try non-REPLICA files first (Source DB)
+    source_files = []
+    replica_files = []
+    for jf in sorted(glob(os.path.join(metrics_dir, "*.json"))):
+        basename = os.path.basename(jf)
+        if basename.startswith("_"):
             continue
+        if basename.startswith("REPLICA_"):
+            replica_files.append(jf)
+        else:
+            source_files.append(jf)
+
+    # Also check metadata for explicit resource_name
+    target_name = (metadata or {}).get("resource_name", "")
+
+    for jf in source_files + replica_files:
+        try:
+            with open(jf) as f:
+                data = json.load(f)
+            items = data.get("data", [])
+            if items:
+                dims = items[0].get("dimensions", {})
+                rid = dims.get("resourceId", "")
+                rname = dims.get("resourceName", "")
+                if rid:
+                    # If target_name specified, match it
+                    if target_name and rname != target_name:
+                        continue
+                    # Skip replica OCIDs for db-system get
+                    if "replica" in rid.lower() and source_files:
+                        continue
+                    return rid, rname
+        except Exception:
+            continue
+
+    # Fallback: return any resourceId found
+    for jf in source_files + replica_files:
         try:
             with open(jf) as f:
                 data = json.load(f)
@@ -63,7 +99,7 @@ def run_oci(cmd, timeout=30):
         return None
 
 
-def fetch_mysql_info(db_system_id, oci_args):
+def fetch_mysql_info(db_system_id, oci_args, compartment_id=""):
     """Fetch MySQL DB System details and configuration."""
     info = {"db_type": "MySQL"}
 
@@ -76,13 +112,14 @@ def fetch_mysql_info(db_system_id, oci_args):
         return info
 
     d = resp.get("data", {})
+    shape_name = d.get("shape-name", "")
+    data_storage = d.get("data-storage-size-in-gbs", 0)
+
     info.update({
         "db_system_id": db_system_id,
         "display_name": d.get("display-name", ""),
-        "shape": d.get("shape-name", ""),
-        "ocpu_count": d.get("cpu-core-count", ""),
-        "memory_gb": round(d.get("data-storage-size-in-gbs", 0) or 0),
-        "storage_gb": d.get("data-storage-size-in-gbs", ""),
+        "shape": shape_name,
+        "storage_gb": data_storage,
         "db_version": d.get("mysql-version", ""),
         "ha_enabled": d.get("is-highly-available", False),
         "lifecycle_state": d.get("lifecycle-state", ""),
@@ -90,15 +127,19 @@ def fetch_mysql_info(db_system_id, oci_args):
         "availability_domain": d.get("availability-domain", ""),
     })
 
-    # Extract shape details if available
-    shape_name = d.get("shape-name", "")
-    if shape_name:
-        info["shape"] = shape_name
-
-    # Memory from shape (not always in db-system get)
-    # Try to get it from heat-wave-cluster or description
-    data_storage = d.get("data-storage-size-in-gbs", 0)
-    info["storage_gb"] = data_storage
+    # Get OCPU/Memory from Shape API (not in db-system get)
+    comp = compartment_id or d.get("compartment-id", "")
+    if shape_name and comp:
+        print(f"  Fetching Shape info: {shape_name}...")
+        cmd = ["oci", "mysql", "shape", "list",
+               *oci_args, "--compartment-id", comp, "--output", "json"]
+        shapes_resp = run_oci(cmd)
+        if shapes_resp:
+            for s in shapes_resp.get("data", []):
+                if s.get("name") == shape_name:
+                    info["ocpu_count"] = s.get("cpu-core-count", "")
+                    info["memory_gb"] = s.get("memory-size-in-gbs", "")
+                    break
 
     # Get configuration
     config_id = d.get("configuration-id", "")
@@ -239,7 +280,7 @@ def main():
     output_path = os.path.join(metrics_dir, "_db_info.json")
 
     # Extract resource ID from metrics
-    resource_id, resource_name = extract_resource_id(metrics_dir)
+    resource_id, resource_name = extract_resource_id(metrics_dir, meta)
     if not resource_id:
         print("WARNING: Could not extract resourceId from metrics")
         json.dump({"error": "resourceId not found in metrics"}, open(output_path, "w"), indent=2)
@@ -248,8 +289,9 @@ def main():
     print(f"  Resource: {resource_name} ({resource_id[:50]}...)")
 
     # Fetch DB info based on namespace
+    compartment_id = meta.get("compartment_id", "")
     if "mysql" in namespace.lower():
-        info = fetch_mysql_info(resource_id, oci_args)
+        info = fetch_mysql_info(resource_id, oci_args, compartment_id)
     elif "postgresql" in namespace.lower() or "psql" in namespace.lower():
         info = fetch_pg_info(resource_id, oci_args)
     else:
