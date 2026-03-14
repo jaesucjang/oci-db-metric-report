@@ -1074,7 +1074,19 @@ function updateCompartmentId() {
     }
   }
   document.getElementById('compartmentId').value = selected;
-  document.getElementById('compHint').textContent = selected ? selected.substring(0, 50) + '...' : '상위 선택 시 하위 자동 조회 (최대 5단계)';
+  // Show compartment name + OCID
+  let compName = '';
+  for (let i = compLevels.length - 1; i >= 0; i--) {
+    if (compLevels[i].style.display !== 'none' && compLevels[i].value) {
+      compName = compLevels[i].options[compLevels[i].selectedIndex].textContent;
+      break;
+    }
+  }
+  if (selected && compName) {
+    document.getElementById('compHint').textContent = compName + ' (' + selected.substring(0, 40) + '...)';
+  } else {
+    document.getElementById('compHint').textContent = '상위 선택 시 하위 자동 조회 (최대 5단계)';
+  }
   document.getElementById('resourceSelect').innerHTML = '<option value="">(전체 - 자동)</option>';
 }
 
