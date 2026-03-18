@@ -1521,11 +1521,14 @@ function downloadPdf(jobId) {
   btn.disabled = true;
   fetch('/api/pdf/' + jobId).then(r => {
     if (!r.ok) return r.json().then(e => { throw new Error(e.error); });
-    return r.blob();
-  }).then(blob => {
+    const cd = r.headers.get('Content-Disposition') || '';
+    const m = cd.match(/filename\*?=(?:UTF-8''|"?)([^";]+)/i);
+    const fname = m ? decodeURIComponent(m[1].replace(/"$/,'')) : 'REPORT.pdf';
+    return r.blob().then(blob => ({blob, fname}));
+  }).then(({blob, fname}) => {
     const url = URL.createObjectURL(blob);
     const a = document.createElement('a');
-    a.href = url; a.download = 'REPORT.pdf'; a.click();
+    a.href = url; a.download = fname; a.click();
     URL.revokeObjectURL(url);
     btn.textContent = 'PDF Report';
     btn.disabled = false;
