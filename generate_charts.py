@@ -233,12 +233,27 @@ def get_hours_span(meta):
         return 1
 
 
+def get_data_hours_span(metrics):
+    """Calculate actual data time span from loaded metrics."""
+    all_min, all_max = None, None
+    for s in metrics.values():
+        if len(s) > 0:
+            smin, smax = s.index.min(), s.index.max()
+            if all_min is None or smin < all_min:
+                all_min = smin
+            if all_max is None or smax > all_max:
+                all_max = smax
+    if all_min and all_max:
+        return (all_max - all_min).total_seconds() / 3600
+    return 1
+
+
 def chart_overview(metrics, categories, meta, output_path):
     bench_start = parse_bench_kst(meta, "bench_start")
     bench_end = parse_bench_kst(meta, "bench_end")
     title = meta.get("report_title", "OCI DB Metric Report")
 
-    hours = get_hours_span(meta)
+    hours = get_data_hours_span(metrics) or get_hours_span(meta)
 
     active_cats = {k: v for k, v in categories.items()
                    if any(m in metrics for m in v["metrics"])}
