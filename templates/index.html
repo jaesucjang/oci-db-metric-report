@@ -316,6 +316,20 @@
             </select>
           </div>
           <div class="form-group">
+            <label>Region</label>
+            <select name="region" id="regionSelect">
+              <option value="">(OCI Config 기본값)</option>
+              <option value="ap-seoul-1">Seoul (ap-seoul-1)</option>
+              <option value="ap-chuncheon-1">Chuncheon (ap-chuncheon-1)</option>
+              <option value="ap-osaka-1">Osaka (ap-osaka-1)</option>
+              <option value="ap-tokyo-1">Tokyo (ap-tokyo-1)</option>
+              <option value="us-ashburn-1">Ashburn (us-ashburn-1)</option>
+              <option value="us-phoenix-1">Phoenix (us-phoenix-1)</option>
+              <option value="us-chicago-1">Chicago (us-chicago-1)</option>
+              <option value="eu-frankfurt-1">Frankfurt (eu-frankfurt-1)</option>
+            </select>
+          </div>
+          <div class="form-group">
             <label>Resource Name</label>
             <div style="display:flex;gap:6px;align-items:center">
               <select name="resource_name" id="resourceSelect" style="flex:1">
@@ -323,7 +337,7 @@
               </select>
               <button type="button" class="btn" id="loadResourcesBtn" style="padding:6px 12px;font-size:12px;white-space:nowrap">조회</button>
             </div>
-            <span class="hint">Namespace 선택 후 [조회] 클릭</span>
+            <span class="hint">Namespace & Region 선택 후 [조회] 클릭</span>
           </div>
           <div class="form-group full">
             <label>Report Title</label>
@@ -606,9 +620,12 @@ function loadConfigProfiles() {
   });
 }
 
+let pendingOciProfile = null;
+
 function renderProfileOptions(profiles) {
   const sel = document.getElementById('ociProfileName');
-  const prev = sel.value;
+  const prev = pendingOciProfile || sel.value;
+  pendingOciProfile = null;
   sel.innerHTML = '';
   if (profiles.length === 0) {
     sel.innerHTML = '<option value="DEFAULT">DEFAULT</option>';
@@ -1075,11 +1092,12 @@ function loadRecent(index) {
     if (cfg.oci_profile_id) {
       const profSel = document.getElementById('profileSelect');
       if (profSel) profSel.value = cfg.oci_profile_id;
+      onProfileChange();
     }
 
-    // Set remaining form fields
+    // Set remaining form fields (except oci_profile which needs special handling)
     Object.entries(cfg).forEach(([k, v]) => {
-      if (['namespace', 'compartment_id', 'resource_name', 'oci_profile_id'].includes(k)) return;
+      if (['namespace', 'compartment_id', 'resource_name', 'oci_profile_id', 'oci_profile'].includes(k)) return;
       const el = form.elements[k];
       if (!el) return;
       if (k.includes('time') && v) {
@@ -1088,6 +1106,19 @@ function loadRecent(index) {
         el.value = v;
       }
     });
+
+    // Restore oci_profile after config profiles are loaded
+    if (cfg.oci_profile) {
+      const ociSel = document.getElementById('ociProfileName');
+      // If option not yet available, add it
+      if (![...ociSel.options].some(o => o.value === cfg.oci_profile)) {
+        const opt = document.createElement('option');
+        opt.value = cfg.oci_profile;
+        opt.textContent = cfg.oci_profile;
+        ociSel.appendChild(opt);
+      }
+      ociSel.value = cfg.oci_profile;
+    }
 
     // Sync timeline slider with loaded values
     if (window.timelineSync) window.timelineSync();
@@ -1115,6 +1146,14 @@ function getProfileId() {
   const s = document.querySelector('[name="oci_profile_id"]');
   return s ? s.value : '';
 }
+function getOciProfile() {
+  const s = document.getElementById('ociProfileName');
+  return s ? s.value : 'DEFAULT';
+}
+function getOciConfigFile() {
+  const s = document.getElementById('ociConfigFile');
+  return s ? s.value : '~/.oci/config';
+}
 
 function loadCompartments(parentId, targetSelect, clearLevels) {
   clearLevels.forEach(sel => { sel.innerHTML = '<option value="">-- 하위 Compartment --</option>'; sel.style.display = 'none'; });
@@ -1124,7 +1163,7 @@ function loadCompartments(parentId, targetSelect, clearLevels) {
   fetch('/api/compartments', {
     method: 'POST',
     headers: {'Content-Type': 'application/json'},
-    body: JSON.stringify({parent_id: parentId, oci_profile_id: getProfileId()}),
+    body: JSON.stringify({parent_id: parentId, oci_profile_id: getProfileId(), oci_profile: getOciProfile(), oci_config_file: getOciConfigFile()}),
   }).then(r => r.json()).then(res => {
     if (res.error || !res.compartments || res.compartments.length === 0) {
       // 최하위 Compartment이거나 에러 → 드롭다운 숨기고 상위 선택 유지
@@ -1192,7 +1231,7 @@ document.getElementById('loadCompartmentsBtn').addEventListener('click', functio
   fetch('/api/compartments', {
     method: 'POST',
     headers: {'Content-Type': 'application/json'},
-    body: JSON.stringify({oci_profile_id: getProfileId()}),
+    body: JSON.stringify({oci_profile_id: getProfileId(), oci_profile: getOciProfile(), oci_config_file: getOciConfigFile()}),
   }).then(r => r.json()).then(res => {
     compLevels[0].innerHTML = '<option value="">-- Compartment 선택 --</option>';
     if (res.error) {
@@ -1246,7 +1285,7 @@ document.getElementById('loadResourcesBtn').addEventListener('click', function()
   fetch('/api/resources', {
     method: 'POST',
     headers: {'Content-Type': 'application/json'},
-    body: JSON.stringify({compartment_id: compId, namespace: ns, oci_profile_id: profileId}),
+    body: JSON.stringify({compartment_id: compId, namespace: ns, oci_profile_id: profileId, oci_profile: getOciProfile(), oci_config_file: getOciConfigFile(), region: document.getElementById('regionSelect').value}),
   }).then(r => r.json()).then(res => {
     sel.innerHTML = '<option value="">(전체 - 자동)</option>';
     if (res.error) {

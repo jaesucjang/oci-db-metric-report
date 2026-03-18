@@ -79,31 +79,34 @@ SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 # Persistent job tracker
 JOBS_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "output", "jobs.json")
 jobs = {}
+jobs_lock = threading.Lock()
 
 
 def load_jobs():
     """Load jobs from disk on startup."""
     global jobs
-    if os.path.isfile(JOBS_FILE):
-        try:
-            with open(JOBS_FILE) as f:
-                jobs = json.load(f)
-        except Exception:
-            jobs = {}
+    with jobs_lock:
+        if os.path.isfile(JOBS_FILE):
+            try:
+                with open(JOBS_FILE) as f:
+                    jobs = json.load(f)
+            except Exception:
+                jobs = {}
 
 
 def save_jobs():
     """Persist jobs to disk (excludes log to keep file small)."""
-    try:
-        os.makedirs(os.path.dirname(JOBS_FILE), exist_ok=True)
-        data = {}
-        for jid, j in jobs.items():
-            data[jid] = {k: v for k, v in j.items() if k != "log"}
-            data[jid]["log"] = ""  # don't persist full logs
-        with open(JOBS_FILE, "w") as f:
-            json.dump(data, f, default=str)
-    except Exception:
-        pass
+    with jobs_lock:
+        try:
+            os.makedirs(os.path.dirname(JOBS_FILE), exist_ok=True)
+            data = {}
+            for jid, j in jobs.items():
+                data[jid] = {k: v for k, v in j.items() if k != "log"}
+                data[jid]["log"] = ""  # don't persist full logs
+            with open(JOBS_FILE, "w") as f:
+                json.dump(data, f, default=str)
+        except Exception:
+            pass
 
 
 def run_job(job_id, config):
@@ -317,16 +320,23 @@ def api_compartments():
     data = request.json or {}
     parent_id = data.get("parent_id", "")
     profile_id = data.get("oci_profile_id", "")
+    oci_profile = data.get("oci_profile", "DEFAULT") or "DEFAULT"
+    oci_config_file = data.get("oci_config_file", "~/.oci/config") or "~/.oci/config"
 
     # Build OCI CLI args
     oci_args = []
-    oci_config_path = os.path.expanduser("~/.oci/config")
-    oci_profile = "DEFAULT"
+    oci_config_path = os.path.expanduser(oci_config_file)
     if profile_id:
         config_path, _ = get_profile_oci_paths(profile_id)
         if config_path:
             oci_args += ["--config-file", config_path]
             oci_config_path = config_path
+            oci_profile = "DEFAULT"  # saved config uses DEFAULT section
+    else:
+        if oci_config_file != "~/.oci/config":
+            oci_args += ["--config-file", oci_config_file]
+        if oci_profile != "DEFAULT":
+            oci_args += ["--profile", oci_profile]
 
     # If no parent_id, use tenancy root
     if not parent_id:
@@ -370,6 +380,9 @@ def api_resources():
     compartment_id = data.get("compartment_id", "")
     namespace = data.get("namespace", "")
     profile_id = data.get("oci_profile_id", "")
+    oci_profile = data.get("oci_profile", "DEFAULT") or "DEFAULT"
+    oci_config_file = data.get("oci_config_file", "~/.oci/config") or "~/.oci/config"
+    region = data.get("region", "")
 
     if not compartment_id or not namespace:
         return jsonify({"error": "compartment_id and namespace required"}), 400
@@ -380,6 +393,14 @@ def api_resources():
         config_path, _ = get_profile_oci_paths(profile_id)
         if config_path:
             oci_args += ["--config-file", config_path]
+            oci_profile = "DEFAULT"
+    else:
+        if oci_config_file != "~/.oci/config":
+            oci_args += ["--config-file", oci_config_file]
+        if oci_profile != "DEFAULT":
+            oci_args += ["--profile", oci_profile]
+    if region:
+        oci_args += ["--region", region]
 
     cmd = [
         "oci", "monitoring", "metric", "list",
@@ -439,17 +460,18 @@ def api_run():
             data["bench_start"], data["bench_end"] = data["bench_end"], data["bench_start"]
 
     job_id = str(uuid.uuid4())[:8]
-    jobs[job_id] = {
-        "id": job_id,
-        "status": "queued",
-        "progress": 0,
-        "config": data,
-        "log": "",
-        "error": None,
-        "stats": None,
-        "metrics_dir": None,
-        "created_at": datetime.now(timezone.utc).isoformat(),
-    }
+    with jobs_lock:
+        jobs[job_id] = {
+            "id": job_id,
+            "status": "queued",
+            "progress": 0,
+            "config": data,
+            "log": "",
+            "error": None,
+            "stats": None,
+            "metrics_dir": None,
+            "created_at": datetime.now(timezone.utc).isoformat(),
+        }
 
     t = threading.Thread(target=run_job, args=(job_id, data), daemon=True)
     t.start()
@@ -538,7 +560,8 @@ def api_delete_job(job_id):
         job_dir = os.path.dirname(job["metrics_dir"])
         if os.path.isdir(job_dir) and "job_" in os.path.basename(job_dir):
             shutil.rmtree(job_dir, ignore_errors=True)
-    del jobs[job_id]
+    with jobs_lock:
+        del jobs[job_id]
     save_jobs()
     return jsonify({"ok": True})
 
@@ -972,4 +995,4 @@ def add_no_cache(response):
 if __name__ == "__main__":
     os.makedirs(app.config["OUTPUT_BASE"], exist_ok=True)
     load_jobs()
-    app.run(host="0.0.0.0", port=5050, debug=False)
+    app.run(host="0.0.0.0", port=5050, debug=False, threaded=True)
