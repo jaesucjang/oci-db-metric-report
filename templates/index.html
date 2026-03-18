@@ -399,7 +399,7 @@
             Generate Report
           </button>
           <label style="display:flex;align-items:center;gap:6px;font-size:13px;color:var(--text-muted);cursor:pointer;">
-            <input type="checkbox" id="chkGenai" checked style="width:16px;height:16px;cursor:pointer;">
+            <input type="checkbox" id="chkGenai" style="width:16px;height:16px;cursor:pointer;">
             AI Analysis (GenAI)
           </label>
         </div>
@@ -751,7 +751,7 @@ function loadGenaiConfig() {
     // Sync checkbox on New Report tab
     const chk = document.getElementById('chkGenai');
     if (cfg.enabled && cfg.api_key_masked) {
-      chk.checked = true;
+      chk.checked = false;
       chk.disabled = false;
     } else {
       chk.checked = false;
