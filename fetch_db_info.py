@@ -6,6 +6,7 @@ Extracts DB system OCID from collected metric JSON, then queries OCI API.
 
 import json
 import os
+import re
 import subprocess
 import sys
 from glob import glob
@@ -38,7 +39,7 @@ def extract_resource_id(metrics_dir, metadata=None):
         basename = os.path.basename(jf)
         if basename.startswith("_"):
             continue
-        if basename.startswith("REPLICA_"):
+        if re.match(r"REPLICA\d*_", basename):
             replica_files.append(jf)
         else:
             source_files.append(jf)

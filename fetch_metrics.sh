@@ -211,16 +211,44 @@ elif [ "$NAMESPACE" = "oci_mysql_database" ]; then
 
   REPLICA_ONLY_METRICS=(ChannelLag ChannelFailure)
 
-  REPLICA_NAMES=$(oci monitoring metric list \
-    $OCI_CONFIG_ARG $OCI_PROFILE_ARG \
-    --compartment-id "$COMPARTMENT_ID" \
-    --namespace "$NAMESPACE" \
-    --name "ChannelLag" \
-    --output json 2>/dev/null | jq -r '.data[].dimensions.resourceName // empty' 2>/dev/null | sort -u)
-
   SOURCE_FILTER=""
+  REPLICA_NAMES=""
   if [ -n "${RESOURCE_NAME:-}" ]; then
     SOURCE_FILTER="{resourceName = \"${RESOURCE_NAME}\"}"
+
+    # Get source DB system ID from monitoring metrics
+    echo "  Looking up source DB system ID for: ${RESOURCE_NAME}..."
+    SOURCE_RID=$(oci monitoring metric list \
+      $OCI_CONFIG_ARG $OCI_PROFILE_ARG \
+      --compartment-id "$COMPARTMENT_ID" \
+      --namespace "$NAMESPACE" \
+      --name "CPUUtilization" \
+      --output json 2>/dev/null | \
+      jq -r --arg rn "$RESOURCE_NAME" \
+        '[.data[] | select(.dimensions.resourceName == $rn)] | .[0].dimensions.resourceId // empty' 2>/dev/null)
+
+    if [ -n "$SOURCE_RID" ]; then
+      echo "  Source DB System ID: ${SOURCE_RID:0:50}..."
+      # List replicas belonging to this specific source DB
+      REPLICA_NAMES=$(oci mysql replica list \
+        $OCI_CONFIG_ARG $OCI_PROFILE_ARG \
+        --compartment-id "$COMPARTMENT_ID" \
+        --db-system-id "$SOURCE_RID" \
+        --output json 2>/dev/null | \
+        jq -r '.data[].display_name // .data[]."display-name" // empty' 2>/dev/null | sort -u)
+      echo "  Replicas from MySQL API: $(echo "$REPLICA_NAMES" | tr '\n' ', ')"
+    fi
+  fi
+
+  # Fallback: discover all replicas from ChannelLag metrics in compartment
+  if [ -z "$REPLICA_NAMES" ]; then
+    echo "  Falling back to ChannelLag metric discovery (all replicas in compartment)..."
+    REPLICA_NAMES=$(oci monitoring metric list \
+      $OCI_CONFIG_ARG $OCI_PROFILE_ARG \
+      --compartment-id "$COMPARTMENT_ID" \
+      --namespace "$NAMESPACE" \
+      --name "ChannelLag" \
+      --output json 2>/dev/null | jq -r '.data[].dimensions.resourceName // empty' 2>/dev/null | sort -u)
   fi
 
   for M in "${METRICS[@]}"; do
@@ -228,15 +256,20 @@ elif [ "$NAMESPACE" = "oci_mysql_database" ]; then
   done
 
   if [ -n "$REPLICA_NAMES" ]; then
+    RIDX=0
     for RNAME in $REPLICA_NAMES; do
+      RIDX=$((RIDX + 1))
+      RTAG="REPLICA${RIDX}"
+      echo "  Replica #${RIDX}: ${RNAME} → prefix ${RTAG}_"
       for M in "${METRICS[@]}"; do
         case "$M" in BackupSize|BackupTime|BackupFailure) continue ;; esac
-        JOBS_LIST+=("REPLICA_${M}|${M}[${INTERVAL}]{resourceName = \"${RNAME}\"}.mean()|REPLICA_${M}")
+        JOBS_LIST+=("${RTAG}_${M}|${M}[${INTERVAL}]{resourceName = \"${RNAME}\"}.mean()|${RTAG}_${M}")
       done
       for M in "${REPLICA_ONLY_METRICS[@]}"; do
-        JOBS_LIST+=("REPLICA_${M}|${M}[${INTERVAL}]{resourceName = \"${RNAME}\"}.mean()|REPLICA_${M}")
+        JOBS_LIST+=("${RTAG}_${M}|${M}[${INTERVAL}]{resourceName = \"${RNAME}\"}.mean()|${RTAG}_${M}")
       done
     done
+    echo "  Total Read Replicas: ${RIDX}"
   else
     echo "  (No Read Replicas detected)"
   fi
@@ -280,6 +313,18 @@ EMPTY_COUNT=$(grep -rl "EMPTY" "${STATUS_DIR}/" 2>/dev/null | wc -l | tr -d ' ')
 rm -rf "$STATUS_DIR"
 
 # --- Save metadata ---
+REPLICA_JSON="[]"
+if [ -n "${REPLICA_NAMES:-}" ]; then
+  REPLICA_JSON="["
+  RIDX2=0
+  for RNAME in $REPLICA_NAMES; do
+    RIDX2=$((RIDX2 + 1))
+    [ $RIDX2 -gt 1 ] && REPLICA_JSON="${REPLICA_JSON},"
+    REPLICA_JSON="${REPLICA_JSON}{\"index\":${RIDX2},\"name\":\"${RNAME}\"}"
+  done
+  REPLICA_JSON="${REPLICA_JSON}]"
+fi
+
 cat > "${OUTPUT_DIR}/_metadata.json" <<EOFMETA
 {
   "namespace": "$NAMESPACE",
@@ -292,7 +337,8 @@ cat > "${OUTPUT_DIR}/_metadata.json" <<EOFMETA
   "resource_name": "${RESOURCE_NAME:-}",
   "report_title": "${REPORT_TITLE:-OCI DB Metric Report}",
   "collected_at": "$(date -u +%Y-%m-%dT%H:%M:%SZ)",
-  "oci_profile": "${OCI_PROFILE:-DEFAULT}"
+  "oci_profile": "${OCI_PROFILE:-DEFAULT}",
+  "replicas": ${REPLICA_JSON}
 }
 EOFMETA
 

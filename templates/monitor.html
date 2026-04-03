@@ -1,0 +1,1257 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>OCI DB Real-time Monitor</title>
+  <script src="https://cdn.jsdelivr.net/npm/chart.js@4"></script>
+  <script src="https://cdn.jsdelivr.net/npm/chartjs-adapter-date-fns@3"></script>
+  <style>
+    :root {
+      --primary: #0969da;
+      --primary-dark: #0550ae;
+      --success: #1a7f37;
+      --danger: #cf222e;
+      --warning: #bf8700;
+      --bg: #f6f8fa;
+      --card: #ffffff;
+      --border: #d0d7de;
+      --text: #1f2328;
+      --text-muted: #656d76;
+      --radius: 8px;
+    }
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+      background: var(--bg); color: var(--text); line-height: 1.6;
+    }
+    .header {
+      background: linear-gradient(135deg, #1a1a2e 0%, #16213e 50%, #0f3460 100%);
+      color: white; padding: 20px 0; text-align: center;
+    }
+    .header h1 { font-size: 24px; font-weight: 700; }
+    .header p { color: #8b949e; margin-top: 4px; font-size: 14px; }
+    .nav-bar {
+      display: flex; justify-content: center; gap: 8px; margin-top: 12px;
+    }
+    .nav-bar a {
+      color: #8b949e; text-decoration: none; padding: 6px 16px; border-radius: 6px;
+      font-size: 13px; font-weight: 600; transition: all .2s;
+    }
+    .nav-bar a:hover { color: white; background: rgba(255,255,255,.1); }
+    .nav-bar a.active { color: white; background: rgba(255,255,255,.15); }
+    .container { max-width: 1200px; margin: 0 auto; padding: 20px 16px; }
+
+    .card {
+      background: var(--card); border: 1px solid var(--border);
+      border-radius: var(--radius); padding: 20px; margin-bottom: 16px;
+    }
+    .card h3 { font-size: 15px; margin-bottom: 14px; color: var(--text); }
+
+    .form-grid { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 12px; }
+    .form-grid.two-col { grid-template-columns: 1fr 1fr; }
+    .form-group { display: flex; flex-direction: column; }
+    .form-group.full { grid-column: 1 / -1; }
+    .form-group label { font-size: 12px; font-weight: 600; color: var(--text-muted); margin-bottom: 3px; }
+    .form-group label .required { color: var(--danger); }
+    .form-group input, .form-group select {
+      padding: 7px 10px; border: 1px solid var(--border); border-radius: 6px;
+      font-size: 13px; background: var(--bg);
+    }
+    .form-group input:focus, .form-group select:focus {
+      outline: none; border-color: var(--primary); box-shadow: 0 0 0 3px rgba(9,105,218,.12);
+    }
+    .hint { font-size: 11px; color: var(--text-muted); margin-top: 2px; }
+
+    .btn {
+      padding: 8px 18px; border: none; border-radius: 6px; font-size: 13px;
+      font-weight: 600; cursor: pointer; transition: all .2s; display: inline-flex;
+      align-items: center; gap: 6px;
+    }
+    .btn-primary { background: var(--primary); color: white; }
+    .btn-primary:hover { background: var(--primary-dark); }
+    .btn-primary:disabled { background: #8b949e; cursor: not-allowed; }
+    .btn-danger { background: var(--danger); color: white; }
+    .btn-danger:hover { background: #a40e26; }
+    .btn-sm { padding: 6px 12px; font-size: 12px; }
+
+    .btn-actions { display: flex; gap: 8px; align-items: center; margin-top: 12px; }
+
+    /* Status */
+    .status-bar {
+      display: none; padding: 10px 16px; border-radius: 6px; margin-bottom: 16px;
+      font-size: 13px; font-weight: 500;
+    }
+    .sample-card {
+      border: 1px solid var(--border); border-radius: var(--radius); padding: 14px;
+      cursor: pointer; transition: all .2s; background: var(--card);
+    }
+    .sample-card:hover { border-color: var(--primary); box-shadow: 0 2px 8px rgba(0,0,0,.08); }
+    .sample-card h4 { font-size: 13px; margin-bottom: 3px; }
+    .sample-card p { font-size: 11px; color: var(--text-muted); margin: 0; }
+
+    .status-bar.active { display: flex; align-items: center; gap: 8px; }
+    .status-bar.info { background: #ddf4ff; color: #0969da; border: 1px solid #54aeff; }
+    .status-bar.error { background: #ffebe9; color: #cf222e; border: 1px solid #ff8182; }
+    .status-bar.success { background: #dafbe1; color: #1a7f37; border: 1px solid #4ac26b; }
+    .pulse {
+      width: 8px; height: 8px; border-radius: 50%; background: currentColor;
+      animation: pulse 1.5s infinite;
+    }
+    @keyframes pulse { 0%,100% { opacity: 1; } 50% { opacity: .3; } }
+
+    /* Charts Grid */
+    .charts-grid {
+      display: grid; grid-template-columns: 1fr 1fr; gap: 16px; margin-bottom: 16px;
+    }
+    .chart-card {
+      background: var(--card); border: 1px solid var(--border);
+      border-radius: var(--radius); padding: 16px; position: relative;
+    }
+    .chart-card h4 { font-size: 13px; color: var(--text-muted); margin-bottom: 4px; }
+    .chart-card .current-value {
+      font-size: 28px; font-weight: 700; margin-bottom: 8px;
+    }
+    .chart-card .badge-group {
+      position: absolute; top: 10px; right: 12px;
+      display: flex; flex-direction: column; align-items: flex-end; gap: 3px;
+    }
+    .chart-card .badge {
+      font-size: 10px; padding: 2px 8px; border-radius: 10px;
+      font-weight: 600; line-height: 1.4;
+    }
+    .badge-refresh { background: #ddf4ff; color: #0969da; }
+    .badge-source { background: #f0f0f0; color: #656d76; }
+    .chart-canvas-wrap { height: 180px; }
+
+    /* Wait Events */
+    .wait-bar { display: flex; align-items: center; gap: 8px; margin-bottom: 6px; font-size: 12px; }
+    .wait-bar .label { width: 80px; text-align: right; color: var(--text-muted); font-weight: 500; }
+    .wait-bar .bar-bg { flex: 1; height: 18px; background: #e1e4e8; border-radius: 4px; overflow: hidden; }
+    .wait-bar .bar-fill { height: 100%; border-radius: 4px; transition: width .5s; }
+    .wait-bar .count { width: 40px; font-weight: 600; }
+
+    /* Advanced */
+    .advanced-section { display: none; }
+    .advanced-section.active { display: block; }
+    .sql-table { width: 100%; border-collapse: collapse; font-size: 12px; }
+    .sql-table th {
+      text-align: left; padding: 6px 8px; border-bottom: 2px solid var(--border);
+      color: var(--text-muted); font-weight: 600;
+    }
+    .sql-table td {
+      padding: 6px 8px; border-bottom: 1px solid #eaeef2; vertical-align: top;
+    }
+    .sql-table td.query { max-width: 500px; word-break: break-all; font-family: monospace; font-size: 11px; }
+    .sql-table td.num { text-align: right; font-family: monospace; }
+
+    .section-title {
+      font-size: 14px; font-weight: 600; margin-bottom: 12px; padding-bottom: 8px;
+      border-bottom: 1px solid var(--border);
+    }
+
+    /* Info Panel */
+    .info-toggle {
+      display: inline-flex; align-items: center; gap: 6px; cursor: pointer;
+      font-size: 13px; font-weight: 600; color: var(--primary); margin-bottom: 12px;
+      user-select: none;
+    }
+    .info-toggle:hover { color: var(--primary-dark); }
+    .info-toggle .arrow { transition: transform .2s; display: inline-block; }
+    .info-toggle.open .arrow { transform: rotate(90deg); }
+    .info-panel { display: none; }
+    .info-panel.open { display: block; }
+    .info-table { width: 100%; border-collapse: collapse; font-size: 12px; }
+    .info-table th {
+      text-align: left; padding: 8px 10px; background: var(--bg);
+      border-bottom: 2px solid var(--border); color: var(--text-muted); font-weight: 600;
+    }
+    .info-table td {
+      padding: 8px 10px; border-bottom: 1px solid #eaeef2; vertical-align: top;
+    }
+    .info-table td.metric-name { font-weight: 600; white-space: nowrap; width: 160px; }
+    .info-table td.source-tag {
+      width: 90px;
+    }
+    .info-table code {
+      background: #f0f3f6; padding: 2px 6px; border-radius: 4px; font-size: 11px;
+      word-break: break-all; display: inline-block; max-width: 100%;
+    }
+    .source-pill {
+      display: inline-block; font-size: 10px; padding: 2px 8px; border-radius: 10px;
+      font-weight: 600;
+    }
+    .source-pill.oci { background: #ddf4ff; color: #0969da; }
+    .source-pill.db { background: #dafbe1; color: #1a7f37; }
+
+    /* Responsive */
+    @media (max-width: 768px) {
+      .form-grid { grid-template-columns: 1fr; }
+      .charts-grid { grid-template-columns: 1fr; }
+    }
+  </style>
+</head>
+<body>
+
+<div class="header">
+  <h1>OCI DB Real-time Monitor</h1>
+  <p>Live monitoring for OCI PostgreSQL & MySQL</p>
+  <div class="nav-bar">
+    <a href="/">Report</a>
+    <a href="/monitor" class="active">Monitor</a>
+  </div>
+</div>
+
+<div class="container">
+
+  <!-- Status Bar -->
+  <div class="status-bar" id="statusBar">
+    <div class="pulse"></div>
+    <span id="statusText"></span>
+  </div>
+
+  <!-- Recent Configs -->
+  <div class="card" id="recentMonitorCard" style="display:none">
+    <h3>Recent Configs</h3>
+    <div class="sample-cards" id="recentMonitorCards" style="display:grid;grid-template-columns:repeat(auto-fill,minmax(250px,1fr));gap:10px;"></div>
+  </div>
+
+  <!-- Config Form -->
+  <div class="card" id="configCard">
+    <h3>Monitor Configuration</h3>
+    <form id="monitorForm" onsubmit="return false;">
+      <!-- OCI Profile -->
+      <div class="form-grid two-col" style="margin-bottom:12px">
+        <div class="form-group full">
+          <label>OCI Profile <span class="required">*</span></label>
+          <div style="display:flex;gap:8px;align-items:center;">
+            <select id="profileSelect" style="flex:1;" onchange="onProfileChange()">
+              <option value="">-- Manual (use local ~/.oci/config) --</option>
+            </select>
+          </div>
+          <span class="hint">Select a saved profile or use manual mode with local config</span>
+        </div>
+        <div class="form-group" id="manualConfigGroup">
+          <label>OCI Config File</label>
+          <div style="display:flex;gap:8px;align-items:center;">
+            <input type="text" id="ociConfigFile" value="~/.oci/config" style="flex:1;">
+            <button type="button" class="btn btn-sm" onclick="loadConfigProfiles()">Load</button>
+          </div>
+        </div>
+        <div class="form-group" id="manualProfileGroup">
+          <label>CLI Profile Name</label>
+          <select id="ociProfileName">
+            <option value="DEFAULT">DEFAULT</option>
+          </select>
+        </div>
+      </div>
+
+      <!-- Compartment / Namespace / Resource -->
+      <div class="form-grid" style="margin-bottom:12px">
+        <div class="form-group full">
+          <label>Compartment <span class="required">*</span></label>
+          <div style="display:flex;gap:6px;align-items:center;margin-bottom:4px">
+            <select id="compLevel1" style="flex:1">
+              <option value="">-- [조회] 클릭 --</option>
+            </select>
+            <button type="button" class="btn btn-sm" id="loadCompartmentsBtn">조회</button>
+          </div>
+          <div style="display:flex;gap:6px;align-items:center;margin-bottom:4px">
+            <select id="compLevel2" class="compLevel" style="flex:1;display:none">
+              <option value="">-- 하위 Compartment --</option>
+            </select>
+          </div>
+          <div style="display:flex;gap:6px;align-items:center;margin-bottom:4px">
+            <select id="compLevel3" class="compLevel" style="flex:1;display:none">
+              <option value="">-- 하위 Compartment --</option>
+            </select>
+          </div>
+          <div style="display:flex;gap:6px;align-items:center;margin-bottom:4px">
+            <select id="compLevel4" class="compLevel" style="flex:1;display:none">
+              <option value="">-- 하위 Compartment --</option>
+            </select>
+          </div>
+          <div style="display:flex;gap:6px;align-items:center">
+            <select id="compLevel5" class="compLevel" style="flex:1;display:none">
+              <option value="">-- 하위 Compartment --</option>
+            </select>
+          </div>
+          <input type="hidden" id="compartmentId" value="">
+          <span class="hint" id="compHint">상위 선택 시 하위 자동 조회 (최대 5단계)</span>
+        </div>
+        <div class="form-group">
+          <label>Namespace <span class="required">*</span></label>
+          <select id="namespace">
+            <option value="oci_postgresql">PostgreSQL</option>
+            <option value="oci_mysql_database">MySQL</option>
+          </select>
+        </div>
+        <div class="form-group">
+          <label>Resource Name</label>
+          <select id="resourceName">
+            <option value="">All</option>
+          </select>
+        </div>
+      </div>
+
+      <!-- DB Connection -->
+      <div class="form-grid" style="margin-bottom:12px">
+        <div class="form-group">
+          <label>DB Host <span class="required">*</span></label>
+          <input type="text" id="dbHost" placeholder="10.0.0.xx or hostname">
+        </div>
+        <div class="form-group">
+          <label>DB Port</label>
+          <input type="number" id="dbPort" value="5432">
+        </div>
+        <div class="form-group">
+          <label>Database</label>
+          <input type="text" id="dbDatabase" value="postgres">
+        </div>
+      </div>
+      <div class="form-grid" style="margin-bottom:12px">
+        <div class="form-group">
+          <label>DB User <span class="required">*</span></label>
+          <input type="text" id="dbUser" placeholder="admin">
+        </div>
+        <div class="form-group">
+          <label>DB Password <span class="required">*</span></label>
+          <input type="password" id="dbPassword">
+        </div>
+        <div class="form-group">
+          <!-- spacer -->
+        </div>
+      </div>
+
+      <!-- Interval / Duration -->
+      <div class="form-grid" style="margin-bottom:0">
+        <div class="form-group">
+          <label>Interval</label>
+          <select id="interval">
+            <option value="5">5 sec</option>
+            <option value="10">10 sec</option>
+            <option value="15" selected>15 sec</option>
+            <option value="30">30 sec</option>
+            <option value="60">60 sec</option>
+          </select>
+          <span class="hint" id="intervalHint"></span>
+        </div>
+        <div class="form-group">
+          <label>Duration (Chart Window)</label>
+          <select id="duration">
+            <option value="300" selected>5 min</option>
+            <option value="600">10 min</option>
+            <option value="1800">30 min</option>
+            <option value="3600">1 hour</option>
+          </select>
+        </div>
+        <div class="form-group" style="justify-content:flex-end">
+          <div class="btn-actions" style="margin-top:0">
+            <button class="btn btn-primary" id="btnStart" onclick="startMonitor()">Start Monitoring</button>
+            <button class="btn btn-danger" id="btnStop" onclick="stopMonitor()" style="display:none">Stop</button>
+          </div>
+        </div>
+      </div>
+    </form>
+  </div>
+
+  <!-- Charts -->
+  <div id="chartsArea" style="display:none">
+    <div class="charts-grid">
+      <div class="chart-card">
+        <h4>CPU Utilization</h4>
+        <div class="current-value" id="cpuValue" style="color:#2563eb">--%</div>
+        <div class="badge-group">
+          <div class="badge badge-refresh" id="cpuBadgeRefresh">Refresh: 15s</div>
+          <div class="badge badge-source" id="cpuBadgeSource">OCI API: 1min</div>
+        </div>
+        <div class="chart-canvas-wrap"><canvas id="cpuChart"></canvas></div>
+      </div>
+      <div class="chart-card">
+        <h4>Memory Utilization</h4>
+        <div class="current-value" id="memValue" style="color:#16a34a">--%</div>
+        <div class="badge-group">
+          <div class="badge badge-refresh" id="memBadgeRefresh">Refresh: 15s</div>
+          <div class="badge badge-source" id="memBadgeSource">OCI API: 1min</div>
+        </div>
+        <div class="chart-canvas-wrap"><canvas id="memChart"></canvas></div>
+      </div>
+      <div class="chart-card">
+        <h4>Sessions / Connections</h4>
+        <div class="current-value" id="sessValue" style="color:#ea580c">--</div>
+        <div class="badge-group">
+          <div class="badge badge-refresh" id="sessBadgeRefresh">Refresh: 15s</div>
+          <div class="badge badge-source" id="sessBadgeSource">DB Query</div>
+        </div>
+        <div class="chart-canvas-wrap"><canvas id="sessChart"></canvas></div>
+      </div>
+      <div class="chart-card">
+        <h4 id="tpsLabel">TPS</h4>
+        <div class="current-value" id="tpsValue" style="color:#dc2626">--</div>
+        <div class="badge-group">
+          <div class="badge badge-refresh" id="tpsBadgeRefresh">Refresh: 15s</div>
+          <div class="badge badge-source" id="tpsBadgeSource">DB Query</div>
+        </div>
+        <div class="chart-canvas-wrap"><canvas id="tpsChart"></canvas></div>
+      </div>
+    </div>
+
+    <!-- Wait Events -->
+    <div class="card">
+      <h3 id="waitTitle">Wait Events</h3>
+      <div id="waitEventsArea"></div>
+    </div>
+
+    <!-- Metric Info Panel -->
+    <div class="card">
+      <div class="info-toggle" id="infoToggle" onclick="toggleInfoPanel()">
+        <span class="arrow">&#9654;</span> Metric Collection Details
+      </div>
+      <div class="info-panel" id="infoPanel">
+        <table class="info-table" id="infoTable">
+          <thead><tr><th>Metric</th><th>Source</th><th>Query / Method</th><th>Resolution</th></tr></thead>
+          <tbody id="infoTableBody"></tbody>
+        </table>
+      </div>
+    </div>
+
+    <!-- Advanced Section -->
+    <div class="advanced-section" id="advancedSection">
+      <div class="card">
+        <div class="section-title">Top 5 SQL by Calls</div>
+        <table class="sql-table" id="sqlByCalls">
+          <thead><tr><th>#</th><th>Query</th><th>Calls</th><th>Avg Time (ms)</th></tr></thead>
+          <tbody></tbody>
+        </table>
+      </div>
+      <div class="card">
+        <div class="section-title">Top 5 SQL by Total Time</div>
+        <table class="sql-table" id="sqlByTime">
+          <thead><tr><th>#</th><th>Query</th><th>Calls</th><th>Total (ms)</th><th>Avg (ms)</th></tr></thead>
+          <tbody></tbody>
+        </table>
+      </div>
+      <div class="card" id="memComponentCard" style="display:none">
+        <div class="section-title">Memory by Component (MySQL)</div>
+        <div style="height:250px"><canvas id="memComponentChart"></canvas></div>
+      </div>
+    </div>
+  </div>
+
+</div>
+
+{% raw %}
+<script>
+// ============================================================
+// State
+// ============================================================
+let sessionId = null;
+let eventSource = null;
+let charts = {};
+let currentInterval = 15;
+let currentDuration = 300;
+let monitorMode = 'basic';
+let lastOciCpu = null;
+let lastOciMem = null;
+
+// Chart colors
+const COLORS = {
+  cpu: '#2563eb', memory: '#16a34a',
+  active: '#ea580c', total: '#a855f7',
+  tps: '#dc2626', cache: '#6b7280',
+};
+const WAIT_COLORS = ['#2563eb','#ea580c','#16a34a','#a855f7','#dc2626','#eab308','#6b7280','#ec4899'];
+
+// ============================================================
+// Profile & Compartment loading (same as report page)
+// ============================================================
+function loadProfiles() {
+  fetch('/api/profiles').then(r => r.json()).then(profiles => {
+    const sel = document.getElementById('profileSelect');
+    sel.innerHTML = '<option value="">-- Manual (use local ~/.oci/config) --</option>';
+    (profiles || []).forEach(p => {
+      const opt = document.createElement('option');
+      opt.value = p.id;
+      opt.textContent = `${p.name}${p.description ? ' - ' + p.description : ''}`;
+      if (p.has_config && p.has_key) {
+        opt.textContent += ' ✓';
+      } else {
+        opt.textContent += ' (incomplete)';
+      }
+      sel.appendChild(opt);
+    });
+  });
+}
+
+function onProfileChange() {
+  const sel = document.getElementById('profileSelect');
+  const manual = !sel.value;
+  document.getElementById('manualConfigGroup').style.display = manual ? '' : 'none';
+  document.getElementById('manualProfileGroup').style.display = manual ? '' : 'none';
+  if (sel.value) {
+    fetch('/api/oci-config-profiles?profile_id=' + encodeURIComponent(sel.value))
+      .then(r => r.json()).then(renderProfileOptions);
+  }
+}
+
+function loadConfigProfiles() {
+  const configFile = document.getElementById('ociConfigFile').value.trim();
+  if (!configFile) return;
+  const profileId = document.getElementById('profileSelect').value;
+  let url = '/api/oci-config-profiles?config_file=' + encodeURIComponent(configFile);
+  if (profileId) url += '&profile_id=' + encodeURIComponent(profileId);
+  fetch(url).then(r => r.json()).then(profiles => {
+    renderProfileOptions(profiles);
+    if (profiles.length === 0) alert('No profiles found in: ' + configFile);
+  });
+}
+
+function renderProfileOptions(profiles) {
+  const sel = document.getElementById('ociProfileName');
+  const prev = sel.value;
+  sel.innerHTML = '';
+  if (!profiles || profiles.length === 0) {
+    sel.innerHTML = '<option value="DEFAULT">DEFAULT</option>';
+    return;
+  }
+  profiles.forEach(p => {
+    const opt = document.createElement('option');
+    opt.value = p.name;
+    opt.textContent = p.name + (p.region ? ' (' + p.region + ')' : '');
+    sel.appendChild(opt);
+  });
+  if (prev && [...sel.options].some(o => o.value === prev)) sel.value = prev;
+}
+
+function getProfileId() {
+  const s = document.getElementById('profileSelect');
+  return s ? s.value : '';
+}
+function getOciProfile() {
+  const s = document.getElementById('ociProfileName');
+  return s ? s.value : 'DEFAULT';
+}
+function getOciConfigFile() {
+  const s = document.getElementById('ociConfigFile');
+  return s ? s.value : '~/.oci/config';
+}
+
+function getOciParams() {
+  return {
+    oci_profile_id: getProfileId(),
+    oci_profile: getOciProfile(),
+    oci_config_file: getOciConfigFile(),
+  };
+}
+
+// --- Compartment cascade (3 levels) ---
+const compLevels = [1,2,3,4,5].map(i => document.getElementById('compLevel'+i));
+
+function updateCompartmentId() {
+  let selected = '';
+  for (let i = compLevels.length - 1; i >= 0; i--) {
+    if (compLevels[i].style.display !== 'none' && compLevels[i].value) {
+      selected = compLevels[i].value;
+      break;
+    }
+  }
+  if (!selected) {
+    for (let i = compLevels.length - 1; i >= 0; i--) {
+      if (i > 0 && compLevels[i].style.display !== 'none' && compLevels[i-1].value) {
+        selected = compLevels[i-1].value;
+        break;
+      }
+    }
+  }
+  document.getElementById('compartmentId').value = selected;
+  let compName = '';
+  for (let i = compLevels.length - 1; i >= 0; i--) {
+    if (compLevels[i].style.display !== 'none' && compLevels[i].value) {
+      compName = compLevels[i].options[compLevels[i].selectedIndex].textContent;
+      break;
+    }
+  }
+  if (selected && compName) {
+    document.getElementById('compHint').textContent = compName + ' (' + selected.substring(0, 40) + '...)';
+  } else {
+    document.getElementById('compHint').textContent = '상위 선택 시 하위 자동 조회 (최대 3단계)';
+  }
+  document.getElementById('resourceName').innerHTML = '<option value="">All</option>';
+}
+
+function loadCompartments(parentId, targetSelect, clearLevels) {
+  clearLevels.forEach(sel => { sel.innerHTML = '<option value="">-- 하위 Compartment --</option>'; sel.style.display = 'none'; });
+  targetSelect.innerHTML = '<option value="">조회중...</option>';
+  targetSelect.style.display = '';
+  fetch('/api/compartments', {
+    method: 'POST',
+    headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify({parent_id: parentId, oci_profile_id: getProfileId(), oci_profile: getOciProfile(), oci_config_file: getOciConfigFile()}),
+  }).then(r => r.json()).then(res => {
+    if (res.error || !res.compartments || res.compartments.length === 0) {
+      targetSelect.style.display = 'none';
+      targetSelect.innerHTML = '<option value="">-- 하위 Compartment --</option>';
+      updateCompartmentId();
+      return;
+    }
+    targetSelect.innerHTML = '<option value="">(이 Compartment 사용)</option>';
+    res.compartments.forEach(c => {
+      const opt = document.createElement('option');
+      opt.value = c.id; opt.textContent = c.name;
+      targetSelect.appendChild(opt);
+    });
+  }).catch(err => {
+    targetSelect.innerHTML = '<option value="">오류</option>';
+    alert('조회 오류: ' + err);
+  });
+}
+
+document.getElementById('loadCompartmentsBtn').addEventListener('click', function() {
+  const btn = this;
+  btn.disabled = true; btn.textContent = '조회중...';
+  compLevels.slice(1).forEach(s => { s.style.display = 'none'; });
+  compLevels[0].innerHTML = '<option value="">조회중...</option>';
+  fetch('/api/compartments', {
+    method: 'POST',
+    headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify({oci_profile_id: getProfileId(), oci_profile: getOciProfile(), oci_config_file: getOciConfigFile()}),
+  }).then(r => r.json()).then(res => {
+    compLevels[0].innerHTML = '<option value="">-- Compartment 선택 --</option>';
+    if (res.error) {
+      alert('조회 실패: ' + res.error);
+    } else if (res.compartments && res.compartments.length > 0) {
+      const rootOpt = document.createElement('option');
+      rootOpt.value = res.parent_id; rootOpt.textContent = '(Root Compartment)';
+      compLevels[0].appendChild(rootOpt);
+      res.compartments.forEach(c => {
+        const opt = document.createElement('option');
+        opt.value = c.id; opt.textContent = c.name;
+        compLevels[0].appendChild(opt);
+      });
+    }
+  }).catch(err => alert('조회 오류: ' + err))
+    .finally(() => { btn.disabled = false; btn.textContent = '조회'; });
+});
+
+compLevels.forEach((sel, idx) => {
+  sel.addEventListener('change', function() {
+    for (let i = idx + 1; i < compLevels.length; i++) {
+      compLevels[i].style.display = 'none';
+      compLevels[i].innerHTML = '<option value="">-- 하위 Compartment --</option>';
+    }
+    updateCompartmentId();
+    if (this.value && idx + 1 < compLevels.length) {
+      loadCompartments(this.value, compLevels[idx + 1], compLevels.slice(idx + 2));
+    }
+  });
+});
+
+// Resource ID map for endpoint lookup
+let resourceIdMap = {};
+
+async function loadResources() {
+  const params = getOciParams();
+  const compartmentId = document.getElementById('compartmentId').value;
+  const namespace = document.getElementById('namespace').value;
+  if (!compartmentId || !namespace) return;
+
+  const sel = document.getElementById('resourceName');
+  sel.innerHTML = '<option value="">Loading...</option>';
+  resourceIdMap = {};
+  try {
+    const r = await fetch('/api/resources', {
+      method: 'POST', headers: {'Content-Type':'application/json'},
+      body: JSON.stringify({ ...params, compartment_id: compartmentId, namespace })
+    });
+    const data = await r.json();
+    sel.innerHTML = '<option value="">All</option>';
+    (data.resources || []).forEach(res => {
+      const name = typeof res === 'string' ? res : res.name;
+      const id = typeof res === 'string' ? '' : res.id;
+      if (id) resourceIdMap[name] = id;
+      sel.innerHTML += `<option value="${name}">${name}</option>`;
+    });
+  } catch(e) {
+    sel.innerHTML = '<option value="">Error</option>';
+  }
+}
+
+// Auto-fill DB Host/Port when resource selected
+document.getElementById('resourceName').addEventListener('change', async function() {
+  const name = this.value;
+  const rid = resourceIdMap[name];
+  if (!name || !rid) return;
+
+  const params = getOciParams();
+  const namespace = document.getElementById('namespace').value;
+
+  document.getElementById('dbHost').placeholder = '조회중...';
+  try {
+    const r = await fetch('/api/db-endpoint', {
+      method: 'POST', headers: {'Content-Type':'application/json'},
+      body: JSON.stringify({ ...params, resource_id: rid, namespace })
+    });
+    const data = await r.json();
+    if (data.host) document.getElementById('dbHost').value = data.host;
+    if (data.port) document.getElementById('dbPort').value = data.port;
+  } catch(e) {}
+  document.getElementById('dbHost').placeholder = '10.0.0.xx or hostname';
+});
+
+// Update defaults when namespace changes
+document.getElementById('namespace').addEventListener('change', function() {
+  const ns = this.value;
+  document.getElementById('dbPort').value = ns === 'oci_postgresql' ? '5432' : '3306';
+  document.getElementById('dbDatabase').value = ns === 'oci_postgresql' ? 'postgres' : 'mysql';
+  document.getElementById('tpsLabel').textContent = ns === 'oci_postgresql' ? 'TPS' : 'QPS';
+  buildInfoTable(ns);
+  loadResources();
+});
+
+document.getElementById('interval').addEventListener('change', function() {
+  const v = parseInt(this.value);
+  document.getElementById('intervalHint').textContent = v <= 5 ? 'Warning: High DB/API load' : '';
+});
+
+// ============================================================
+// Charts Init
+// ============================================================
+function initCharts() {
+  const commonOpts = (label, color, yMin, yMax, unit) => ({
+    type: 'line',
+    data: {
+      datasets: [{
+        label, borderColor: color, backgroundColor: color + '20',
+        borderWidth: 2, pointRadius: 2, fill: true, tension: 0.3, data: [],
+      }]
+    },
+    options: {
+      responsive: true, maintainAspectRatio: false,
+      animation: { duration: 300 },
+      scales: {
+        x: {
+          type: 'time', time: { tooltipFormat: 'HH:mm:ss', displayFormats: { second: 'HH:mm:ss' } },
+          ticks: { maxTicksLimit: 8, font: { size: 10 } },
+        },
+        y: {
+          min: yMin, max: yMax,
+          ticks: { font: { size: 10 }, callback: v => v + (unit || '') },
+        },
+      },
+      plugins: { legend: { display: false } },
+    }
+  });
+
+  charts.cpu = new Chart(document.getElementById('cpuChart'), commonOpts('CPU %', COLORS.cpu, 0, 100, '%'));
+  charts.memory = new Chart(document.getElementById('memChart'), commonOpts('Memory %', COLORS.memory, 0, 100, '%'));
+
+  // Sessions chart (dual line)
+  charts.sessions = new Chart(document.getElementById('sessChart'), {
+    type: 'line',
+    data: {
+      datasets: [
+        { label: 'Active', borderColor: COLORS.active, borderWidth: 2, pointRadius: 2, tension: 0.3, data: [] },
+        { label: 'Total', borderColor: COLORS.total, borderWidth: 2, pointRadius: 2, borderDash: [4,2], tension: 0.3, data: [] },
+      ]
+    },
+    options: {
+      responsive: true, maintainAspectRatio: false, animation: { duration: 300 },
+      scales: {
+        x: { type: 'time', time: { tooltipFormat: 'HH:mm:ss', displayFormats: { second: 'HH:mm:ss' } }, ticks: { maxTicksLimit: 8, font: { size: 10 } } },
+        y: { min: 0, ticks: { font: { size: 10 } } },
+      },
+      plugins: { legend: { display: true, position: 'top', labels: { boxWidth: 12, font: { size: 10 } } } },
+    }
+  });
+
+  // TPS chart (dual: tps + cache hit)
+  charts.tps = new Chart(document.getElementById('tpsChart'), {
+    type: 'line',
+    data: {
+      datasets: [
+        { label: 'TPS', borderColor: COLORS.tps, borderWidth: 2, pointRadius: 2, tension: 0.3, data: [], yAxisID: 'y' },
+        { label: 'Cache Hit %', borderColor: COLORS.cache, borderWidth: 1.5, pointRadius: 1, borderDash: [3,2], tension: 0.3, data: [], yAxisID: 'y1' },
+      ]
+    },
+    options: {
+      responsive: true, maintainAspectRatio: false, animation: { duration: 300 },
+      scales: {
+        x: { type: 'time', time: { tooltipFormat: 'HH:mm:ss', displayFormats: { second: 'HH:mm:ss' } }, ticks: { maxTicksLimit: 8, font: { size: 10 } } },
+        y: { min: 0, position: 'left', ticks: { font: { size: 10 } } },
+        y1: { min: 0, max: 100, position: 'right', grid: { drawOnChartArea: false }, ticks: { font: { size: 10 }, callback: v => v+'%' } },
+      },
+      plugins: { legend: { display: true, position: 'top', labels: { boxWidth: 12, font: { size: 10 } } } },
+    }
+  });
+}
+
+function destroyCharts() {
+  Object.values(charts).forEach(c => c.destroy());
+  charts = {};
+  if (window._memComponentChart) { window._memComponentChart.destroy(); window._memComponentChart = null; }
+}
+
+// ============================================================
+// Data Push
+// ============================================================
+function addDataPoint(chart, datasetIdx, ts, value) {
+  if (value === null || value === undefined) return;
+  const ds = chart.data.datasets[datasetIdx];
+  ds.data.push({ x: new Date(ts), y: value });
+
+  // Trim by duration
+  const cutoff = Date.now() - currentDuration * 1000;
+  while (ds.data.length > 0 && ds.data[0].x.getTime() < cutoff) {
+    ds.data.shift();
+  }
+}
+
+function updateBasicData(d) {
+  const ts = d.timestamp;
+
+  // OCI metrics (may not update every tick)
+  if (d.oci.updated) {
+    lastOciCpu = d.oci.cpu;
+    lastOciMem = d.oci.memory;
+  }
+  if (lastOciCpu !== null) {
+    addDataPoint(charts.cpu, 0, ts, lastOciCpu);
+    document.getElementById('cpuValue').textContent = lastOciCpu + '%';
+  }
+  if (lastOciMem !== null) {
+    addDataPoint(charts.memory, 0, ts, lastOciMem);
+    document.getElementById('memValue').textContent = lastOciMem + '%';
+  }
+
+  // DB metrics
+  const db = d.db;
+  addDataPoint(charts.sessions, 0, ts, db.active_sessions);
+  addDataPoint(charts.sessions, 1, ts, db.total_connections);
+  document.getElementById('sessValue').textContent = db.active_sessions + ' / ' + db.total_connections;
+
+  addDataPoint(charts.tps, 0, ts, db.tps);
+  addDataPoint(charts.tps, 1, ts, db.cache_hit_ratio);
+  document.getElementById('tpsValue').textContent = db.tps + '/s';
+
+  // Update all charts with animation
+  Object.values(charts).forEach(c => c.update());
+
+  // Wait events
+  renderWaitEvents(db.wait_events || {});
+}
+
+function renderWaitEvents(events) {
+  const area = document.getElementById('waitEventsArea');
+  const entries = Object.entries(events).sort((a, b) => b[1] - a[1]);
+  if (entries.length === 0) {
+    area.innerHTML = '<div style="color:var(--text-muted);font-size:13px">No active wait events</div>';
+    return;
+  }
+  const maxVal = Math.max(...entries.map(e => e[1]), 1);
+  area.innerHTML = entries.map(([name, count], i) => {
+    const pct = Math.round(count / maxVal * 100);
+    const color = WAIT_COLORS[i % WAIT_COLORS.length];
+    return `<div class="wait-bar">
+      <span class="label">${name}</span>
+      <div class="bar-bg"><div class="bar-fill" style="width:${pct}%;background:${color}"></div></div>
+      <span class="count">${count}</span>
+    </div>`;
+  }).join('');
+}
+
+function updateAdvancedData(d) {
+  // Top SQL by Calls
+  const callsBody = document.querySelector('#sqlByCalls tbody');
+  callsBody.innerHTML = (d.top_sql_by_calls || []).map((s, i) =>
+    `<tr><td>${i+1}</td><td class="query">${escHtml(s.query)}</td><td class="num">${s.calls.toLocaleString()}</td><td class="num">${s.avg_time_ms}</td></tr>`
+  ).join('') || '<tr><td colspan="4" style="color:var(--text-muted)">No data</td></tr>';
+
+  // Top SQL by Time
+  const timeBody = document.querySelector('#sqlByTime tbody');
+  timeBody.innerHTML = (d.top_sql_by_time || []).map((s, i) =>
+    `<tr><td>${i+1}</td><td class="query">${escHtml(s.query)}</td><td class="num">${s.calls.toLocaleString()}</td><td class="num">${(s.total_time_ms||0).toLocaleString()}</td><td class="num">${s.avg_time_ms}</td></tr>`
+  ).join('') || '<tr><td colspan="5" style="color:var(--text-muted)">No data</td></tr>';
+
+  // Memory by Component (MySQL only)
+  if (d.memory_by_component && d.memory_by_component.length > 0) {
+    document.getElementById('memComponentCard').style.display = '';
+    if (window._memComponentChart) window._memComponentChart.destroy();
+    window._memComponentChart = new Chart(document.getElementById('memComponentChart'), {
+      type: 'doughnut',
+      data: {
+        labels: d.memory_by_component.map(m => m.name),
+        datasets: [{
+          data: d.memory_by_component.map(m => m.bytes),
+          backgroundColor: WAIT_COLORS,
+        }]
+      },
+      options: {
+        responsive: true, maintainAspectRatio: false,
+        plugins: {
+          legend: { position: 'right', labels: { font: { size: 10 } } },
+          tooltip: { callbacks: { label: ctx => ctx.label + ': ' + formatBytes(ctx.parsed) } },
+        }
+      }
+    });
+  }
+}
+
+function escHtml(s) {
+  return s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+}
+
+function formatBytes(b) {
+  if (b < 1024) return b + ' B';
+  if (b < 1024*1024) return (b/1024).toFixed(1) + ' KB';
+  if (b < 1024*1024*1024) return (b/1024/1024).toFixed(1) + ' MB';
+  return (b/1024/1024/1024).toFixed(2) + ' GB';
+}
+
+// ============================================================
+// Monitor Control
+// ============================================================
+async function startMonitor() {
+  const params = getOciParams();
+  const compartmentId = document.getElementById('compartmentId').value;
+  const namespace = document.getElementById('namespace').value;
+  const dbHost = document.getElementById('dbHost').value.trim();
+  const dbUser = document.getElementById('dbUser').value.trim();
+  const dbPassword = document.getElementById('dbPassword').value;
+
+  if (!compartmentId) return showStatus('error', 'Select a compartment');
+  if (!dbHost) return showStatus('error', 'Enter DB host');
+  if (!dbUser || !dbPassword) return showStatus('error', 'Enter DB user and password');
+
+  currentInterval = parseInt(document.getElementById('interval').value);
+  currentDuration = parseInt(document.getElementById('duration').value);
+
+  const body = {
+    ...params,
+    compartment_id: compartmentId,
+    namespace: namespace,
+    resource_name: document.getElementById('resourceName').value,
+    db_host: dbHost,
+    db_port: document.getElementById('dbPort').value,
+    db_user: dbUser,
+    db_password: dbPassword,
+    db_database: document.getElementById('dbDatabase').value,
+    interval: currentInterval,
+    duration: currentDuration,
+  };
+
+  document.getElementById('btnStart').disabled = true;
+  showStatus('info', 'Connecting...');
+
+  try {
+    const r = await fetch('/api/monitor/start', {
+      method: 'POST', headers: {'Content-Type':'application/json'}, body: JSON.stringify(body)
+    });
+    const data = await r.json();
+    if (!r.ok) {
+      showStatus('error', data.error || 'Failed to start');
+      document.getElementById('btnStart').disabled = false;
+      return;
+    }
+
+    sessionId = data.session_id;
+    monitorMode = data.advanced ? 'advanced' : 'basic';
+
+    // Update UI
+    document.getElementById('btnStart').style.display = 'none';
+    document.getElementById('btnStop').style.display = '';
+    document.getElementById('chartsArea').style.display = '';
+
+    // Update badges
+    // Update badges: refresh interval + data source
+    const refreshText = `Refresh: ${currentInterval}s`;
+    ['cpuBadgeRefresh','memBadgeRefresh','sessBadgeRefresh','tpsBadgeRefresh'].forEach(id => {
+      document.getElementById(id).textContent = refreshText;
+    });
+
+    // TPS/QPS label
+    document.getElementById('tpsLabel').textContent = namespace === 'oci_postgresql' ? 'TPS / Cache Hit' : 'QPS / Cache Hit';
+
+    // Build metric info table
+    buildInfoTable(namespace);
+
+    // Advanced section
+    if (monitorMode === 'advanced') {
+      document.getElementById('advancedSection').classList.add('active');
+      if (namespace === 'oci_mysql_database') {
+        document.getElementById('memComponentCard').style.display = '';
+      }
+    }
+
+    // Init charts
+    destroyCharts();
+    initCharts();
+
+    // Start SSE
+    startSSE();
+
+  } catch(e) {
+    showStatus('error', 'Connection error: ' + e.message);
+    document.getElementById('btnStart').disabled = false;
+  }
+}
+
+function startSSE() {
+  if (eventSource) eventSource.close();
+  eventSource = new EventSource(`/api/monitor/stream/${sessionId}`);
+
+  eventSource.onmessage = function(e) {
+    try {
+      const d = JSON.parse(e.data);
+      if (d.type === 'init') {
+        showStatus('success', d.message);
+      } else if (d.type === 'basic') {
+        updateBasicData(d);
+      } else if (d.type === 'advanced') {
+        updateAdvancedData(d);
+      } else if (d.type === 'error') {
+        showStatus('error', d.message);
+        stopMonitor();
+      }
+    } catch(err) {}
+  };
+
+  eventSource.onerror = function() {
+    if (sessionId) {
+      showStatus('error', 'Connection lost. Reconnecting...');
+    }
+  };
+}
+
+async function stopMonitor() {
+  if (eventSource) {
+    eventSource.close();
+    eventSource = null;
+  }
+  if (sessionId) {
+    try {
+      await fetch(`/api/monitor/stop/${sessionId}`, { method: 'POST' });
+    } catch(e) {}
+    sessionId = null;
+  }
+
+  document.getElementById('btnStart').style.display = '';
+  document.getElementById('btnStart').disabled = false;
+  document.getElementById('btnStop').style.display = 'none';
+  showStatus('info', 'Monitoring stopped');
+}
+
+function showStatus(type, msg) {
+  const bar = document.getElementById('statusBar');
+  bar.className = 'status-bar active ' + type;
+  document.getElementById('statusText').textContent = msg;
+}
+
+// ============================================================
+// Init
+// ============================================================
+loadProfiles();
+loadConfigProfiles();
+loadRecentMonitorConfigs();
+buildInfoTable(document.getElementById('namespace').value);
+
+// ============================================================
+// Metric Info Panel
+// ============================================================
+function toggleInfoPanel() {
+  const toggle = document.getElementById('infoToggle');
+  const panel = document.getElementById('infoPanel');
+  toggle.classList.toggle('open');
+  panel.classList.toggle('open');
+}
+
+function buildInfoTable(namespace) {
+  const isPG = namespace === 'oci_postgresql';
+  const rows = [
+    {
+      metric: 'CPU Utilization',
+      source: 'oci',
+      query: isPG
+        ? 'CpuUtilization[1m]{dbInstanceRole = "PRIMARY"}.mean()'
+        : 'CPUUtilization[1m]{resourceName = "..."}.mean()',
+      resolution: '1 min',
+      prereq: 'OCI IAM Policy: Allow group ... to read metrics in compartment ...',
+    },
+    {
+      metric: 'Memory Utilization',
+      source: 'oci',
+      query: isPG
+        ? 'MemoryUtilization[1m]{dbInstanceRole = "PRIMARY"}.mean()'
+        : 'MemoryUtilization[1m]{resourceName = "..."}.mean()',
+      resolution: '1 min',
+      prereq: 'OCI IAM Policy: Allow group ... to read metrics in compartment ...',
+    },
+    {
+      metric: 'Active Sessions',
+      source: 'db',
+      query: isPG
+        ? "SELECT count(*) FROM pg_stat_activity WHERE state = 'active'"
+        : "SHOW GLOBAL STATUS LIKE 'Threads_running'",
+      resolution: 'Real-time',
+      prereq: isPG ? null : null,
+    },
+    {
+      metric: 'Total Connections',
+      source: 'db',
+      query: isPG
+        ? 'SELECT count(*) FROM pg_stat_activity'
+        : "SHOW GLOBAL STATUS LIKE 'Threads_connected'",
+      resolution: 'Real-time',
+      prereq: null,
+    },
+    {
+      metric: isPG ? 'TPS (Transactions/sec)' : 'QPS (Queries/sec)',
+      source: 'db',
+      query: isPG
+        ? 'sum(xact_commit + xact_rollback) FROM pg_stat_database (delta/interval)'
+        : "SHOW GLOBAL STATUS LIKE 'Questions' (delta/interval)",
+      resolution: 'Real-time (delta)',
+      prereq: null,
+    },
+    {
+      metric: 'Cache Hit Ratio',
+      source: 'db',
+      query: isPG
+        ? 'blks_hit / (blks_hit + blks_read) * 100 FROM pg_stat_database'
+        : "Innodb_buffer_pool_read_requests / (requests + reads) * 100",
+      resolution: 'Real-time',
+      prereq: null,
+    },
+    {
+      metric: 'Wait Events',
+      source: 'db',
+      query: isPG
+        ? "SELECT wait_event_type, count(*) FROM pg_stat_activity WHERE state='active' GROUP BY 1"
+        : "Innodb_rows_read/inserted/updated/deleted (delta/sec)",
+      resolution: 'Real-time',
+      prereq: null,
+    },
+    {
+      metric: 'Top SQL by Calls',
+      source: 'db',
+      query: isPG
+        ? 'SELECT query, calls, mean_exec_time FROM pg_stat_statements ORDER BY calls DESC LIMIT 5'
+        : 'SELECT DIGEST_TEXT, COUNT_STAR, AVG_TIMER_WAIT FROM performance_schema.events_statements_summary_by_digest ORDER BY COUNT_STAR DESC LIMIT 5',
+      resolution: 'Every 2 cycles',
+      prereq: isPG
+        ? 'OCI Console → DB System → Configuration에서 shared_preload_libraries에 pg_stat_statements 포함 확인 → DB에서 CREATE EXTENSION pg_stat_statements 실행'
+        : 'performance_schema = ON  (OCI MySQL: 대부분 기본 ON, Console → Configuration에서 확인)',
+    },
+    {
+      metric: 'Top SQL by Time',
+      source: 'db',
+      query: isPG
+        ? 'SELECT query, calls, total_exec_time FROM pg_stat_statements ORDER BY total_exec_time DESC LIMIT 5'
+        : 'SELECT DIGEST_TEXT, COUNT_STAR, SUM_TIMER_WAIT FROM performance_schema.events_statements_summary_by_digest ORDER BY SUM_TIMER_WAIT DESC LIMIT 5',
+      resolution: 'Every 2 cycles',
+      prereq: isPG
+        ? 'OCI Console → DB System → Configuration에서 shared_preload_libraries에 pg_stat_statements 포함 확인 → DB에서 CREATE EXTENSION pg_stat_statements 실행'
+        : 'performance_schema = ON  (OCI MySQL: 대부분 기본 ON, Console → Configuration에서 확인)',
+    },
+    {
+      metric: 'Memory by Component',
+      source: 'db',
+      query: isPG ? null : 'SELECT EVENT_NAME, CURRENT_NUMBER_OF_BYTES_USED FROM performance_schema.memory_summary_global_by_event_name ORDER BY 2 DESC LIMIT 10',
+      resolution: 'Every 2 cycles',
+      prereq: isPG ? null : "performance_schema = ON  (OCI MySQL: 대부분 기본 ON, memory instrument 기본 활성)",
+    },
+  ].filter(r => r.query !== null);
+
+  const tbody = document.getElementById('infoTableBody');
+  tbody.innerHTML = rows.map(r => {
+    const prereqHtml = r.prereq
+      ? `<div style="margin-top:4px"><span style="display:inline-block;font-size:10px;padding:1px 6px;border-radius:8px;background:#fff8c5;color:#9a6700;font-weight:600">Required</span> <span style="font-size:11px;color:#9a6700">${r.prereq}</span></div>`
+      : '';
+    return `<tr>
+      <td class="metric-name">${r.metric}</td>
+      <td class="source-tag"><span class="source-pill ${r.source}">${r.source === 'oci' ? 'OCI API' : 'DB Query'}</span></td>
+      <td><code>${r.query}</code>${prereqHtml}</td>
+      <td style="white-space:nowrap;font-size:11px;color:var(--text-muted)">${r.resolution}</td>
+    </tr>`;
+  }).join('');
+}
+
+function loadRecentMonitorConfigs() {
+  fetch('/api/recent-monitor-configs').then(r => r.json()).then(recents => {
+    const card = document.getElementById('recentMonitorCard');
+    const el = document.getElementById('recentMonitorCards');
+    if (!recents || recents.length === 0) {
+      card.style.display = 'none';
+      return;
+    }
+    card.style.display = '';
+    el.innerHTML = recents.map(s => `
+      <div class="sample-card" onclick="loadRecentMonitor(${s.index})">
+        <h4>${s.label}</h4>
+        <p>${s.description}</p>
+      </div>
+    `).join('');
+  });
+}
+
+function loadRecentMonitor(index) {
+  fetch('/api/recent-monitor-configs/' + index).then(r => r.json()).then(cfg => {
+    // Namespace
+    if (cfg.namespace) {
+      const ns = document.getElementById('namespace');
+      ns.value = cfg.namespace;
+      document.getElementById('dbPort').value = cfg.namespace === 'oci_postgresql' ? '5432' : '3306';
+      document.getElementById('dbDatabase').value = cfg.namespace === 'oci_postgresql' ? 'postgres' : 'mysql';
+    }
+
+    // OCI Profile
+    if (cfg.oci_profile_id) {
+      document.getElementById('profileSelect').value = cfg.oci_profile_id;
+      onProfileChange();
+    }
+    if (cfg.oci_profile) {
+      const ociSel = document.getElementById('ociProfileName');
+      if (![...ociSel.options].some(o => o.value === cfg.oci_profile)) {
+        const opt = document.createElement('option');
+        opt.value = cfg.oci_profile; opt.textContent = cfg.oci_profile;
+        ociSel.appendChild(opt);
+      }
+      ociSel.value = cfg.oci_profile;
+    }
+
+    // Compartment
+    if (cfg.compartment_id) {
+      document.getElementById('compartmentId').value = cfg.compartment_id;
+      document.getElementById('compHint').textContent = cfg.compartment_id.substring(0, 50) + '...';
+      // Set compLevel1 so user sees something
+      const lvl1 = document.getElementById('compLevel1');
+      lvl1.innerHTML = '<option value="' + cfg.compartment_id + '">' + (cfg.compartment_id.substring(0, 40) + '...') + '</option>';
+      lvl1.value = cfg.compartment_id;
+    }
+
+    // Resource
+    if (cfg.resource_name) {
+      const sel = document.getElementById('resourceName');
+      if (![...sel.options].some(o => o.value === cfg.resource_name)) {
+        const opt = document.createElement('option');
+        opt.value = cfg.resource_name; opt.textContent = cfg.resource_name;
+        sel.appendChild(opt);
+      }
+      sel.value = cfg.resource_name;
+    }
+
+    // DB connection
+    if (cfg.db_host) document.getElementById('dbHost').value = cfg.db_host;
+    if (cfg.db_port) document.getElementById('dbPort').value = cfg.db_port;
+    if (cfg.db_user) document.getElementById('dbUser').value = cfg.db_user;
+    if (cfg.db_database) document.getElementById('dbDatabase').value = cfg.db_database;
+    if (cfg.interval) document.getElementById('interval').value = cfg.interval;
+    if (cfg.duration) document.getElementById('duration').value = cfg.duration;
+
+    showStatus('info', 'Config loaded — enter DB password and click Start');
+  });
+}
+</script>
+{% endraw %}
+
+</body>
+</html>

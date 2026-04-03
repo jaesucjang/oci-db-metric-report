@@ -8,11 +8,15 @@ import json
 import os
 import subprocess
 import threading
+import time
 import uuid
-from datetime import datetime, timezone
+from concurrent.futures import ThreadPoolExecutor
+from datetime import datetime, timezone, timedelta
+from decimal import Decimal
 from pathlib import Path
+from queue import Queue, Empty
 
-from flask import Flask, render_template, request, jsonify, send_from_directory, redirect, url_for
+from flask import Flask, render_template, request, jsonify, send_from_directory, redirect, url_for, Response
 
 app = Flask(__name__)
 
@@ -424,9 +428,76 @@ def api_resources():
             rid = dims.get("resourceId", "")
             if rname and rname not in seen and "backup" not in rname.lower() and "backup" not in rid.lower():
                 seen.add(rname)
-                resources.append(rname)
+                resources.append({"name": rname, "id": rid})
 
-        return jsonify({"resources": sorted(resources)})
+        resources.sort(key=lambda x: x["name"])
+        return jsonify({"resources": resources})
+    except subprocess.TimeoutExpired:
+        return jsonify({"error": "OCI CLI timeout"}), 504
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
+@app.route("/api/db-endpoint", methods=["POST"])
+def api_db_endpoint():
+    """Get DB system endpoint (host/port) from resource ID."""
+    data = request.json or {}
+    resource_id = data.get("resource_id", "")
+    namespace = data.get("namespace", "")
+    profile_id = data.get("oci_profile_id", "")
+    oci_profile = data.get("oci_profile", "DEFAULT") or "DEFAULT"
+    oci_config_file = data.get("oci_config_file", "~/.oci/config") or "~/.oci/config"
+
+    if not resource_id or not namespace:
+        return jsonify({"error": "resource_id and namespace required"}), 400
+
+    # Build OCI CLI args
+    oci_args = []
+    if profile_id:
+        config_path, _ = get_profile_oci_paths(profile_id)
+        if config_path:
+            oci_args += ["--config-file", config_path]
+            oci_profile = "DEFAULT"
+    else:
+        if oci_config_file != "~/.oci/config":
+            oci_args += ["--config-file", oci_config_file]
+        if oci_profile != "DEFAULT":
+            oci_args += ["--profile", oci_profile]
+
+    try:
+        if namespace == "oci_postgresql":
+            cmd = ["oci", "psql", "db-system", "get", *oci_args,
+                   "--db-system-id", resource_id, "--output", "json"]
+            result = subprocess.run(cmd, capture_output=True, text=True, timeout=30)
+            if result.returncode != 0:
+                return jsonify({"error": result.stderr[:300]}), 500
+            db_data = json.loads(result.stdout).get("data", {})
+            # PostgreSQL: network-details.primary-db-endpoint-private-ip
+            net = db_data.get("network-details", {})
+            host = net.get("primary-db-endpoint-private-ip", "")
+            port = db_data.get("instance-count", 5432)  # default port
+            # Try to get port from db-configuration-params or default
+            port = 5432
+            return jsonify({"host": host, "port": port})
+
+        elif namespace == "oci_mysql_database":
+            cmd = ["oci", "mysql", "db-system", "get", *oci_args,
+                   "--db-system-id", resource_id, "--output", "json"]
+            result = subprocess.run(cmd, capture_output=True, text=True, timeout=30)
+            if result.returncode != 0:
+                return jsonify({"error": result.stderr[:300]}), 500
+            db_data = json.loads(result.stdout).get("data", {})
+            host = db_data.get("ip-address", "")
+            port = db_data.get("port", 3306)
+            endpoints = db_data.get("endpoints", [])
+            if endpoints and not host:
+                host = endpoints[0].get("ip-address", "")
+                port = endpoints[0].get("port", 3306)
+            return jsonify({"host": host, "port": port})
+
+        else:
+            return jsonify({"error": "Unsupported namespace"}), 400
+
     except subprocess.TimeoutExpired:
         return jsonify({"error": "OCI CLI timeout"}), 504
     except Exception as e:
@@ -540,12 +611,26 @@ def api_analysis(job_id):
         return jsonify({"content": f.read()})
 
 
+def _job_file_prefix(job):
+    """Build descriptive filename prefix from job config."""
+    cfg = job.get("config", {})
+    ns_short = "PG" if "postgresql" in cfg.get("namespace", "") else "MySQL"
+    rname = cfg.get("resource_name", "").replace(" ", "_") or "all"
+    st = cfg.get("start_time", "")[:16].replace("-", "").replace("T", "_").replace(":", "")
+    et = cfg.get("end_time", "")[:16].replace("-", "").replace("T", "_").replace(":", "")
+    return f"{ns_short}_{rname}_{st}_{et}"
+
+
 @app.route("/api/download/<job_id>/<filename>")
 def api_download(job_id, filename):
     job = jobs.get(job_id)
     if not job or not job["metrics_dir"]:
         return jsonify({"error": "Not found"}), 404
-    return send_from_directory(job["metrics_dir"], filename, as_attachment=True)
+    prefix = _job_file_prefix(job)
+    name, ext = os.path.splitext(filename)
+    dl_name = f"{name}_{prefix}{ext}"
+    return send_from_directory(job["metrics_dir"], filename, as_attachment=True,
+                               download_name=dl_name)
 
 
 @app.route("/api/jobs/<job_id>", methods=["DELETE"])
@@ -591,16 +676,46 @@ def api_pdf(job_id):
     if not os.path.isfile(pdf_path):
         return jsonify({"error": "PDF file not created"}), 500
 
-    # Build descriptive filename: REPORT_PG_resourceName_20260316_1420_20260317_1420.pdf
-    cfg = job.get("config", {})
-    ns_short = "PG" if "postgresql" in cfg.get("namespace", "") else "MySQL"
-    rname = cfg.get("resource_name", "").replace(" ", "_") or "all"
-    st = cfg.get("start_time", "")[:16].replace("-", "").replace("T", "_").replace(":", "")
-    et = cfg.get("end_time", "")[:16].replace("-", "").replace("T", "_").replace(":", "")
-    pdf_name = f"REPORT_{ns_short}_{rname}_{st}_{et}.pdf"
-
+    pdf_name = f"REPORT_{_job_file_prefix(job)}.pdf"
     return send_from_directory(metrics_dir, "REPORT.pdf", as_attachment=True,
                                download_name=pdf_name)
+
+
+@app.route("/api/rawdata/<job_id>")
+def api_rawdata(job_id):
+    """Download all CSV raw data as a ZIP file."""
+    import zipfile
+    import io
+
+    job = jobs.get(job_id)
+    if not job or not job.get("metrics_dir"):
+        return jsonify({"error": "Not found"}), 404
+
+    metrics_dir = job["metrics_dir"]
+    csv_files = sorted(
+        f for f in os.listdir(metrics_dir)
+        if f.endswith(".csv") and not f.startswith("_")
+    )
+    if not csv_files:
+        return jsonify({"error": "No CSV data found"}), 404
+
+    buf = io.BytesIO()
+    with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as zf:
+        for fname in csv_files:
+            zf.write(os.path.join(metrics_dir, fname), fname)
+        # Include metadata
+        meta_path = os.path.join(metrics_dir, "_metadata.json")
+        if os.path.isfile(meta_path):
+            zf.write(meta_path, "_metadata.json")
+    buf.seek(0)
+
+    zip_name = f"RAWDATA_{_job_file_prefix(job)}.zip"
+
+    return Response(
+        buf.getvalue(),
+        mimetype="application/zip",
+        headers={"Content-Disposition": f'attachment; filename="{zip_name}"'},
+    )
 
 
 @app.route("/api/jobs")
@@ -982,6 +1097,546 @@ def api_test_genai():
         return jsonify({"ok": True, "message": f"Connected! Response: {text}"})
     except Exception as e:
         return jsonify({"ok": False, "message": str(e)[:300]})
+
+
+# ============================================================
+# Real-time Monitor
+# ============================================================
+monitors = {}
+monitors_lock = threading.Lock()
+
+
+def _build_oci_monitor_args(config):
+    """Build OCI CLI args from monitor config."""
+    oci_args = []
+    profile_id = config.get("oci_profile_id", "")
+    oci_profile = config.get("oci_profile", "DEFAULT") or "DEFAULT"
+    oci_config_file = config.get("oci_config_file", "~/.oci/config") or "~/.oci/config"
+
+    if profile_id:
+        config_path, _ = get_profile_oci_paths(profile_id)
+        if config_path:
+            oci_args += ["--config-file", config_path]
+            oci_profile = "DEFAULT"
+    else:
+        if oci_config_file != "~/.oci/config":
+            oci_args += ["--config-file", oci_config_file]
+        if oci_profile != "DEFAULT":
+            oci_args += ["--profile", oci_profile]
+
+    region = config.get("region", "")
+    if region:
+        oci_args += ["--region", region]
+
+    return oci_args, oci_profile
+
+
+def _fetch_oci_metrics(config, oci_args, oci_profile):
+    """Fetch CPU/Memory from OCI Monitoring API."""
+    namespace = config["namespace"]
+    compartment_id = config["compartment_id"]
+    resource_name = config.get("resource_name", "")
+    now = datetime.now(timezone.utc)
+    start = (now - timedelta(minutes=3)).strftime("%Y-%m-%dT%H:%M:%SZ")
+    end = now.strftime("%Y-%m-%dT%H:%M:%SZ")
+
+    if namespace == "oci_postgresql":
+        metrics = [
+            ("cpu", 'CpuUtilization[1m]{dbInstanceRole = "PRIMARY"}.mean()'),
+            ("memory", 'MemoryUtilization[1m]{dbInstanceRole = "PRIMARY"}.mean()'),
+        ]
+    else:
+        filt = '{resourceName = "' + resource_name + '"}' if resource_name else ""
+        metrics = [
+            ("cpu", f"CPUUtilization[1m]{filt}.mean()"),
+            ("memory", f"MemoryUtilization[1m]{filt}.mean()"),
+        ]
+
+    results = {}
+
+    def fetch_one(key, query):
+        cmd = [
+            "oci", "monitoring", "metric-data", "summarize-metrics-data",
+            *oci_args,
+            "--compartment-id", compartment_id,
+            "--namespace", namespace,
+            "--query-text", query,
+            "--start-time", start, "--end-time", end,
+            "--output", "json",
+        ]
+        try:
+            r = subprocess.run(cmd, capture_output=True, text=True, timeout=10)
+            if r.returncode == 0:
+                data = json.loads(r.stdout).get("data", [])
+                if data and data[0].get("aggregated-datapoints"):
+                    pts = data[0]["aggregated-datapoints"]
+                    latest = pts[-1]
+                    results[key] = round(latest.get("value", 0), 2)
+                    results[key + "_ts"] = latest.get("timestamp", "")
+        except Exception:
+            pass
+
+    with ThreadPoolExecutor(max_workers=2) as ex:
+        for k, q in metrics:
+            ex.submit(fetch_one, k, q)
+
+    return results
+
+
+def _detect_advanced_mode(conn, namespace):
+    """Detect if advanced metrics are available."""
+    try:
+        if namespace == "oci_postgresql":
+            cur = conn.cursor()
+            cur.execute("SELECT 1 FROM pg_extension WHERE extname = 'pg_stat_statements'")
+            found = cur.fetchone() is not None
+            cur.close()
+            return found
+        else:
+            cur = conn.cursor()
+            cur.execute("SHOW VARIABLES LIKE 'performance_schema'")
+            row = cur.fetchone()
+            cur.close()
+            if row:
+                val = row[1] if isinstance(row, (list, tuple)) else row.get("Value", "OFF")
+                return str(val).upper() == "ON"
+    except Exception:
+        pass
+    return False
+
+
+def _fetch_db_metrics_pg(conn, prev):
+    """Fetch basic DB metrics from PostgreSQL."""
+    cur = conn.cursor()
+    result = {}
+
+    cur.execute("SELECT count(*) FROM pg_stat_activity WHERE state = 'active'")
+    result["active_sessions"] = cur.fetchone()[0]
+
+    cur.execute("SELECT count(*) FROM pg_stat_activity")
+    result["total_connections"] = cur.fetchone()[0]
+
+    cur.execute(
+        "SELECT sum(xact_commit) + sum(xact_rollback), sum(blks_hit), sum(blks_read) "
+        "FROM pg_stat_database"
+    )
+    row = cur.fetchone()
+    total_xact = int(row[0] or 0)
+    blks_hit = int(row[1] or 0)
+    blks_read = int(row[2] or 0)
+
+    now_ts = time.time()
+    if prev.get("xact_total") is not None and prev.get("ts"):
+        dt = now_ts - prev["ts"]
+        if dt > 0:
+            result["tps"] = round((total_xact - prev["xact_total"]) / dt, 1)
+        else:
+            result["tps"] = 0
+    else:
+        result["tps"] = 0
+
+    total_blks = blks_hit + blks_read
+    result["cache_hit_ratio"] = round((blks_hit / total_blks * 100) if total_blks > 0 else 100, 1)
+
+    # Wait events
+    cur.execute(
+        "SELECT wait_event_type, count(*) FROM pg_stat_activity "
+        "WHERE state = 'active' AND wait_event_type IS NOT NULL "
+        "GROUP BY wait_event_type ORDER BY count(*) DESC"
+    )
+    result["wait_events"] = {r[0]: r[1] for r in cur.fetchall()}
+
+    cur.close()
+
+    prev["xact_total"] = total_xact
+    prev["ts"] = now_ts
+
+    return result
+
+
+def _fetch_db_metrics_mysql(conn, prev):
+    """Fetch basic DB metrics from MySQL."""
+    cur = conn.cursor()
+    result = {}
+
+    def get_status(name):
+        cur.execute(f"SHOW GLOBAL STATUS LIKE '{name}'")
+        row = cur.fetchone()
+        if row:
+            val = row[1] if isinstance(row, (list, tuple)) else row.get("Value", "0")
+            return int(val)
+        return 0
+
+    result["active_sessions"] = get_status("Threads_running")
+    result["total_connections"] = get_status("Threads_connected")
+
+    questions = get_status("Questions")
+    now_ts = time.time()
+    if prev.get("questions") is not None and prev.get("ts"):
+        dt = now_ts - prev["ts"]
+        if dt > 0:
+            result["tps"] = round((questions - prev["questions"]) / dt, 1)
+        else:
+            result["tps"] = 0
+    else:
+        result["tps"] = 0
+
+    read_requests = get_status("Innodb_buffer_pool_read_requests")
+    reads = get_status("Innodb_buffer_pool_reads")
+    total = read_requests + reads
+    result["cache_hit_ratio"] = round((read_requests / total * 100) if total > 0 else 100, 1)
+
+    # InnoDB row ops for wait event approximation
+    result["wait_events"] = {}
+    rows_read = get_status("Innodb_rows_read")
+    rows_inserted = get_status("Innodb_rows_inserted")
+    rows_updated = get_status("Innodb_rows_updated")
+    rows_deleted = get_status("Innodb_rows_deleted")
+    if prev.get("rows_read") is not None and prev.get("ts"):
+        dt = now_ts - prev["ts"]
+        if dt > 0:
+            result["wait_events"]["Read"] = round((rows_read - prev["rows_read"]) / dt)
+            result["wait_events"]["Insert"] = round((rows_inserted - prev["rows_inserted"]) / dt)
+            result["wait_events"]["Update"] = round((rows_updated - prev["rows_updated"]) / dt)
+            result["wait_events"]["Delete"] = round((rows_deleted - prev["rows_deleted"]) / dt)
+
+    cur.close()
+
+    prev["questions"] = questions
+    prev["rows_read"] = rows_read
+    prev["rows_inserted"] = rows_inserted
+    prev["rows_updated"] = rows_updated
+    prev["rows_deleted"] = rows_deleted
+    prev["ts"] = now_ts
+
+    return result
+
+
+def _fetch_advanced_pg(conn):
+    """Fetch advanced metrics from PostgreSQL pg_stat_statements."""
+    cur = conn.cursor()
+    results = {}
+
+    try:
+        cur.execute(
+            "SELECT query, calls, total_exec_time, mean_exec_time "
+            "FROM pg_stat_statements ORDER BY calls DESC LIMIT 5"
+        )
+        results["top_sql_by_calls"] = [
+            {"query": r[0][:120], "calls": r[1], "avg_time_ms": round(r[3], 2)}
+            for r in cur.fetchall()
+        ]
+
+        cur.execute(
+            "SELECT query, calls, total_exec_time, mean_exec_time "
+            "FROM pg_stat_statements ORDER BY total_exec_time DESC LIMIT 5"
+        )
+        results["top_sql_by_time"] = [
+            {"query": r[0][:120], "calls": r[1], "total_time_ms": round(r[2], 2), "avg_time_ms": round(r[3], 2)}
+            for r in cur.fetchall()
+        ]
+    except Exception:
+        results["top_sql_by_calls"] = []
+        results["top_sql_by_time"] = []
+
+    cur.close()
+    return results
+
+
+def _fetch_advanced_mysql(conn):
+    """Fetch advanced metrics from MySQL performance_schema."""
+    cur = conn.cursor()
+    results = {}
+
+    try:
+        cur.execute(
+            "SELECT DIGEST_TEXT, COUNT_STAR, SUM_TIMER_WAIT/1000000000 as total_ms, "
+            "AVG_TIMER_WAIT/1000000000 as avg_ms "
+            "FROM performance_schema.events_statements_summary_by_digest "
+            "WHERE DIGEST_TEXT IS NOT NULL ORDER BY COUNT_STAR DESC LIMIT 5"
+        )
+        results["top_sql_by_calls"] = [
+            {"query": (r[0] or "")[:120], "calls": r[1], "avg_time_ms": round(r[3], 2)}
+            for r in cur.fetchall()
+        ]
+
+        cur.execute(
+            "SELECT DIGEST_TEXT, COUNT_STAR, SUM_TIMER_WAIT/1000000000 as total_ms, "
+            "AVG_TIMER_WAIT/1000000000 as avg_ms "
+            "FROM performance_schema.events_statements_summary_by_digest "
+            "WHERE DIGEST_TEXT IS NOT NULL ORDER BY SUM_TIMER_WAIT DESC LIMIT 5"
+        )
+        results["top_sql_by_time"] = [
+            {"query": (r[0] or "")[:120], "calls": r[1], "total_time_ms": round(r[2], 2), "avg_time_ms": round(r[3], 2)}
+            for r in cur.fetchall()
+        ]
+
+        cur.execute(
+            "SELECT EVENT_NAME, CURRENT_NUMBER_OF_BYTES_USED "
+            "FROM performance_schema.memory_summary_global_by_event_name "
+            "WHERE CURRENT_NUMBER_OF_BYTES_USED > 0 "
+            "ORDER BY CURRENT_NUMBER_OF_BYTES_USED DESC LIMIT 10"
+        )
+        results["memory_by_component"] = [
+            {"name": r[0].split("/")[-1], "bytes": r[1]}
+            for r in cur.fetchall()
+        ]
+    except Exception:
+        results["top_sql_by_calls"] = []
+        results["top_sql_by_time"] = []
+        results["memory_by_component"] = []
+
+    cur.close()
+    return results
+
+
+def _connect_db(config):
+    """Connect to database based on namespace."""
+    namespace = config["namespace"]
+    host = config["db_host"]
+    port = int(config.get("db_port", 5432 if namespace == "oci_postgresql" else 3306))
+    user = config["db_user"]
+    password = config["db_password"]
+    database = config.get("db_database", "postgres" if namespace == "oci_postgresql" else "mysql")
+
+    if namespace == "oci_postgresql":
+        import psycopg2
+        return psycopg2.connect(host=host, port=port, user=user, password=password, dbname=database, connect_timeout=10)
+    else:
+        import mysql.connector
+        return mysql.connector.connect(host=host, port=port, user=user, password=password, database=database, connect_timeout=10)
+
+
+@app.route("/monitor")
+def monitor_page():
+    return render_template("monitor.html")
+
+
+# ============================================================
+# Recent monitor configs
+# ============================================================
+RECENT_MONITOR_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "output", "recent_monitor_configs.json")
+
+
+def load_recent_monitor_configs():
+    if os.path.isfile(RECENT_MONITOR_FILE):
+        try:
+            with open(RECENT_MONITOR_FILE) as f:
+                return json.load(f)
+        except Exception:
+            pass
+    return []
+
+
+def save_recent_monitor_config(config):
+    """Save monitor config to recent list (max 5, newest first, no duplicates)."""
+    recents = load_recent_monitor_configs()
+    key = f"{config.get('namespace', '')}|{config.get('compartment_id', '')}|{config.get('resource_name', '')}|{config.get('db_host', '')}"
+    recents = [r for r in recents if f"{r['config'].get('namespace', '')}|{r['config'].get('compartment_id', '')}|{r['config'].get('resource_name', '')}|{r['config'].get('db_host', '')}" != key]
+    ns_short = "PG" if "postgresql" in config.get("namespace", "") else "MySQL"
+    rname = config.get("resource_name", "") or "(전체)"
+    db_host = config.get("db_host", "")
+    entry = {
+        "label": f"{ns_short} - {rname}",
+        "description": f"{db_host}:{config.get('db_port', '')}",
+        "saved_at": datetime.now(timezone.utc).isoformat(),
+        "config": {k: v for k, v in config.items() if k not in ("db_password",)},
+    }
+    recents.insert(0, entry)
+    recents = recents[:5]
+    try:
+        os.makedirs(os.path.dirname(RECENT_MONITOR_FILE), exist_ok=True)
+        with open(RECENT_MONITOR_FILE, "w") as f:
+            json.dump(recents, f, indent=2)
+    except Exception:
+        pass
+
+
+@app.route("/api/recent-monitor-configs")
+def api_recent_monitor_configs():
+    recents = load_recent_monitor_configs()
+    return jsonify([
+        {"index": i, "label": r["label"], "description": r.get("description", ""), "saved_at": r.get("saved_at", "")}
+        for i, r in enumerate(recents)
+    ])
+
+
+@app.route("/api/recent-monitor-configs/<int:index>")
+def api_recent_monitor_config(index):
+    recents = load_recent_monitor_configs()
+    if index < 0 or index >= len(recents):
+        return jsonify({"error": "Not found"}), 404
+    return jsonify(recents[index]["config"])
+
+
+@app.route("/api/monitor/start", methods=["POST"])
+def api_monitor_start():
+    """Start a monitoring session."""
+    data = request.json or {}
+    required = ["compartment_id", "namespace", "db_host", "db_user", "db_password"]
+    for f in required:
+        if not data.get(f):
+            return jsonify({"error": f"Missing required field: {f}"}), 400
+
+    session_id = str(uuid.uuid4())[:8]
+
+    # Test DB connection and detect mode
+    try:
+        conn = _connect_db(data)
+        advanced = _detect_advanced_mode(conn, data["namespace"])
+        conn.close()
+    except Exception as e:
+        return jsonify({"error": f"DB connection failed: {e}"}), 400
+
+    interval = int(data.get("interval", 15))
+    duration = int(data.get("duration", 300))
+
+    # Save to recent monitor configs on success
+    save_recent_monitor_config(data)
+
+    with monitors_lock:
+        monitors[session_id] = {
+            "config": data,
+            "interval": interval,
+            "duration": duration,
+            "advanced": advanced,
+            "running": True,
+            "queue": Queue(),
+        }
+
+    return jsonify({
+        "session_id": session_id,
+        "advanced": advanced,
+        "namespace": data["namespace"],
+        "interval": interval,
+        "duration": duration,
+    })
+
+
+@app.route("/api/monitor/stream/<session_id>")
+def api_monitor_stream(session_id):
+    """SSE stream for real-time monitoring data."""
+    session = monitors.get(session_id)
+    if not session:
+        return jsonify({"error": "Session not found"}), 404
+
+    def generate():
+        config = session["config"]
+        namespace = config["namespace"]
+        interval = session["interval"]
+        advanced = session["advanced"]
+
+        oci_args, oci_profile = _build_oci_monitor_args(config)
+
+        # Init message
+        if advanced:
+            if namespace == "oci_postgresql":
+                msg = "pg_stat_statements detected — Advanced mode enabled"
+            else:
+                msg = "performance_schema ON — Advanced mode enabled"
+        else:
+            if namespace == "oci_postgresql":
+                msg = "Basic mode (enable pg_stat_statements for Top SQL)"
+            else:
+                msg = "Basic mode (enable performance_schema for Top SQL)"
+
+        def _json(obj):
+            return json.dumps(obj, default=lambda o: float(o) if isinstance(o, Decimal) else str(o))
+
+        init_data = _json({
+            "type": "init",
+            "mode": "advanced" if advanced else "basic",
+            "namespace": namespace,
+            "interval": interval,
+            "duration": session["duration"],
+            "message": msg,
+        })
+        yield f"data: {init_data}\n\n"
+
+        # Connect to DB
+        try:
+            conn = _connect_db(config)
+        except Exception as e:
+            err = _json({"type": "error", "message": f"DB connection failed: {e}"})
+            yield f"data: {err}\n\n"
+            return
+
+        prev = {}
+        loop_count = 0
+
+        try:
+            while session.get("running", False):
+                loop_count += 1
+
+                # Fetch OCI + DB metrics in parallel
+                oci_result = {}
+                db_result = {}
+
+                def fetch_oci():
+                    nonlocal oci_result
+                    oci_result = _fetch_oci_metrics(config, oci_args, oci_profile)
+
+                def fetch_db():
+                    nonlocal db_result
+                    if namespace == "oci_postgresql":
+                        db_result = _fetch_db_metrics_pg(conn, prev)
+                    else:
+                        db_result = _fetch_db_metrics_mysql(conn, prev)
+
+                with ThreadPoolExecutor(max_workers=2) as ex:
+                    ex.submit(fetch_oci)
+                    ex.submit(fetch_db)
+
+                now_kst = (datetime.now(timezone.utc) + timedelta(hours=9)).strftime("%Y-%m-%dT%H:%M:%S+09:00")
+
+                basic_data = _json({
+                    "type": "basic",
+                    "timestamp": now_kst,
+                    "oci": {
+                        "cpu": oci_result.get("cpu", None),
+                        "memory": oci_result.get("memory", None),
+                        "updated": bool(oci_result.get("cpu") is not None),
+                    },
+                    "db": db_result,
+                })
+                yield f"data: {basic_data}\n\n"
+
+                # Advanced data every 2nd loop
+                if advanced and loop_count % 2 == 0:
+                    try:
+                        if namespace == "oci_postgresql":
+                            adv = _fetch_advanced_pg(conn)
+                        else:
+                            adv = _fetch_advanced_mysql(conn)
+                        adv["type"] = "advanced"
+                        yield f"data: {_json(adv)}\n\n"
+                    except Exception:
+                        pass
+
+                time.sleep(interval)
+
+        except GeneratorExit:
+            pass
+        finally:
+            try:
+                conn.close()
+            except Exception:
+                pass
+
+    return Response(generate(), mimetype="text/event-stream",
+                    headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"})
+
+
+@app.route("/api/monitor/stop/<session_id>", methods=["POST"])
+def api_monitor_stop(session_id):
+    """Stop a monitoring session."""
+    session = monitors.get(session_id)
+    if not session:
+        return jsonify({"error": "Session not found"}), 404
+    session["running"] = False
+    with monitors_lock:
+        monitors.pop(session_id, None)
+    return jsonify({"ok": True})
 
 
 @app.after_request

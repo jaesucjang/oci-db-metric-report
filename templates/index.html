@@ -229,6 +229,10 @@
 <div class="header">
   <h1>OCI DB Metric Report</h1>
   <p>Collect OCI Database monitoring metrics, generate charts & reports</p>
+  <div style="display:flex;justify-content:center;gap:8px;margin-top:12px">
+    <a href="/" style="color:white;background:rgba(255,255,255,.15);text-decoration:none;padding:6px 16px;border-radius:6px;font-size:13px;font-weight:600">Report</a>
+    <a href="/monitor" style="color:#8b949e;text-decoration:none;padding:6px 16px;border-radius:6px;font-size:13px;font-weight:600;transition:all .2s" onmouseover="this.style.color='white';this.style.background='rgba(255,255,255,.1)'" onmouseout="this.style.color='#8b949e';this.style.background='transparent'">Monitor</a>
+  </div>
 </div>
 
 <div class="container">
@@ -1291,7 +1295,8 @@ document.getElementById('loadResourcesBtn').addEventListener('click', function()
     if (res.error) {
       alert('조회 실패: ' + res.error);
     } else if (res.resources && res.resources.length > 0) {
-      res.resources.forEach(name => {
+      res.resources.forEach(r => {
+        const name = typeof r === 'string' ? r : r.name;
         const opt = document.createElement('option');
         opt.value = name;
         opt.textContent = name;
@@ -1453,6 +1458,7 @@ function showResults(status) {
   const dl = document.getElementById('downloadLinks');
   dl.innerHTML = `
     <button class="btn btn-primary btn-sm" onclick="downloadPdf('${currentJobId}')">PDF Report</button>
+    <button class="btn btn-outline btn-sm" onclick="downloadRawData('${currentJobId}')">Raw Data (ZIP)</button>
   ` + [
     ['REPORT.md', 'Markdown Report'],
     ['analysis.md', 'Analysis Report'],
@@ -1535,6 +1541,29 @@ function downloadPdf(jobId) {
   }).catch(err => {
     alert('PDF generation failed: ' + err.message);
     btn.textContent = 'PDF Report';
+    btn.disabled = false;
+  });
+}
+function downloadRawData(jobId) {
+  const btn = event.target;
+  btn.textContent = 'Downloading...';
+  btn.disabled = true;
+  fetch('/api/rawdata/' + jobId).then(r => {
+    if (!r.ok) return r.json().then(e => { throw new Error(e.error); });
+    const cd = r.headers.get('Content-Disposition') || '';
+    const m = cd.match(/filename\*?=(?:UTF-8''|"?)([^";]+)/i);
+    const fname = m ? decodeURIComponent(m[1].replace(/"$/,'')) : 'rawdata.zip';
+    return r.blob().then(blob => ({blob, fname}));
+  }).then(({blob, fname}) => {
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url; a.download = fname; a.click();
+    URL.revokeObjectURL(url);
+    btn.textContent = 'Raw Data (ZIP)';
+    btn.disabled = false;
+  }).catch(err => {
+    alert('Download failed: ' + err.message);
+    btn.textContent = 'Raw Data (ZIP)';
     btn.disabled = false;
   });
 }

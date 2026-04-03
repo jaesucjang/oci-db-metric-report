@@ -77,27 +77,94 @@ MYSQL_CATEGORIES = {
         "colors": ["#3498db", "#95a5a6"],
         "desc": ["Used (GB)", "Allocated (GB)"],
     },
-    "Replica - Performance (%)": {
-        "metrics": ["REPLICA_CPUUtilization", "REPLICA_MemoryUtilization"],
-        "colors": ["#c0392b", "#2980b9"],
-        "desc": ["Replica CPU", "Replica Memory"],
-    },
-    "Replica - Replication": {
-        "metrics": ["REPLICA_ChannelLag", "REPLICA_ChannelFailure"],
-        "colors": ["#e67e22", "#e74c3c"],
-        "desc": ["Channel Lag (s)", "Channel Failure"],
-    },
-    "Replica - Connections": {
-        "metrics": ["REPLICA_ActiveConnections", "REPLICA_CurrentConnections"],
-        "colors": ["#e67e22", "#9b59b6"],
-        "desc": ["Active", "Current"],
-    },
-    "Replica - Disk IOPS": {
-        "metrics": ["REPLICA_DbVolumeReadOperations", "REPLICA_DbVolumeWriteOperations"],
-        "colors": ["#3498db", "#e74c3c"],
-        "desc": ["Read IOPS", "Write IOPS"],
-    },
 }
+
+
+def build_mysql_replica_categories(metrics, meta):
+    """Dynamically build replica chart categories from discovered replicas."""
+    replicas = meta.get("replicas", [])
+    # Fallback: detect from metric names if metadata missing
+    if not replicas:
+        import re
+        indices = set()
+        for name in metrics:
+            m = re.match(r"REPLICA(\d+)_", name)
+            if m:
+                indices.add(int(m.group(1)))
+        replicas = [{"index": i, "name": f"Replica {i}"} for i in sorted(indices)]
+    if not replicas:
+        # Legacy: single REPLICA_ prefix (backward compat with old data)
+        if any(k.startswith("REPLICA_") for k in metrics):
+            return {
+                "Replica - Performance (%)": {
+                    "metrics": ["REPLICA_CPUUtilization", "REPLICA_MemoryUtilization"],
+                    "colors": ["#c0392b", "#2980b9"],
+                    "desc": ["Replica CPU", "Replica Memory"],
+                },
+                "Replica - Replication": {
+                    "metrics": ["REPLICA_ChannelLag", "REPLICA_ChannelFailure"],
+                    "colors": ["#e67e22", "#e74c3c"],
+                    "desc": ["Channel Lag (s)", "Channel Failure"],
+                },
+                "Replica - Connections": {
+                    "metrics": ["REPLICA_ActiveConnections", "REPLICA_CurrentConnections"],
+                    "colors": ["#e67e22", "#9b59b6"],
+                    "desc": ["Active", "Current"],
+                },
+                "Replica - Disk IOPS": {
+                    "metrics": ["REPLICA_DbVolumeReadOperations", "REPLICA_DbVolumeWriteOperations"],
+                    "colors": ["#3498db", "#e74c3c"],
+                    "desc": ["Read IOPS", "Write IOPS"],
+                },
+            }
+        return {}
+
+    # Color palette per replica (cycle if more than expected)
+    REPLICA_COLORS = [
+        ("#c0392b", "#e74c3c"),  # reds
+        ("#2980b9", "#3498db"),  # blues
+        ("#27ae60", "#2ecc71"),  # greens
+        ("#8e44ad", "#9b59b6"),  # purples
+        ("#d35400", "#e67e22"),  # oranges
+    ]
+
+    def _rlabel(r):
+        idx = r["index"]
+        rname = r.get("name", f"Replica {idx}")
+        return f"R{idx}" if rname == f"Replica {idx}" else f"R{idx}({rname})"
+
+    # Build combined charts: one chart per metric category, all replicas as separate lines
+    chart_defs = [
+        ("Replica - CPU (%)", "CPUUtilization", "CPU"),
+        ("Replica - Memory (%)", "MemoryUtilization", "Mem"),
+        ("Replica - Channel Lag", "ChannelLag", "Lag(s)"),
+        ("Replica - Channel Failure", "ChannelFailure", "Failure"),
+        ("Replica - Active Connections", "ActiveConnections", "Active"),
+        ("Replica - Current Connections", "CurrentConnections", "Current"),
+        ("Replica - Read IOPS", "DbVolumeReadOperations", "Read IOPS"),
+        ("Replica - Write IOPS", "DbVolumeWriteOperations", "Write IOPS"),
+    ]
+
+    cats = {}
+    for chart_name, metric_suffix, desc_suffix in chart_defs:
+        metric_names = []
+        colors = []
+        descs = []
+        for i, r in enumerate(replicas):
+            tag = f"REPLICA{r['index']}"
+            mname = f"{tag}_{metric_suffix}"
+            if mname in metrics:
+                metric_names.append(mname)
+                cpair = REPLICA_COLORS[i % len(REPLICA_COLORS)]
+                colors.append(cpair[0])
+                descs.append(f"{_rlabel(r)} {desc_suffix}")
+        if metric_names:
+            cats[chart_name] = {
+                "metrics": metric_names,
+                "colors": colors,
+                "desc": descs,
+            }
+    return cats
 
 PG_CATEGORIES = {
     "Performance (%) - PRIMARY": {
@@ -402,7 +469,8 @@ def main():
     print(f"  Metrics loaded: {len(metrics)}")
 
     if "mysql" in ns:
-        categories = MYSQL_CATEGORIES
+        categories = dict(MYSQL_CATEGORIES)
+        categories.update(build_mysql_replica_categories(metrics, meta))
         key_metrics = MYSQL_KEY_METRICS
     else:
         categories = PG_CATEGORIES
@@ -500,17 +568,11 @@ def analyze_metrics(metrics, namespace):
         lines.append("")
 
         if cpu["max"] >= 90:
-            findings.append(f"{severity_icon('critical')} CPU 최대 {cpu['max']:.1f}% — CPU 포화 상태 감지")
-            recommendations.append("- **CPU Scale-up 필요**: OCPU/ECPU 수를 증가시키거나 Shape 업그레이드 검토")
-            recommendations.append("- 슬로우 쿼리 분석: `EXPLAIN`으로 풀스캔 쿼리 최적화")
-            recommendations.append("- 인덱스 최적화: 자주 사용되는 WHERE/JOIN 컬럼에 인덱스 추가")
+            findings.append(f"{severity_icon('critical')} CPU 최대 {cpu['max']:.1f}% — CPU 포화 구간 감지")
         elif cpu["p95"] >= 70:
-            findings.append(f"{severity_icon('warning')} CPU P95 {cpu['p95']:.1f}% — 피크 시간대 부하 높음")
-            recommendations.append("- 피크 시간대 워크로드 분산 또는 Read Replica 활용 검토")
-            recommendations.append("- 쿼리 캐싱 및 커넥션 풀링 최적화")
+            findings.append(f"{severity_icon('warning')} CPU P95 {cpu['p95']:.1f}% — 피크 시간대 높은 부하 관측")
         elif cpu["mean"] < 10:
-            findings.append(f"{severity_icon('good')} CPU 평균 {cpu['mean']:.1f}% — 여유 충분 (오버프로비저닝 가능성)")
-            recommendations.append("- Shape 다운사이징으로 비용 절감 가능성 검토")
+            findings.append(f"{severity_icon('good')} CPU 평균 {cpu['mean']:.1f}% — 여유 충분")
         else:
             findings.append(f"{severity_icon('good')} CPU 평균 {cpu['mean']:.1f}%, 최대 {cpu['max']:.1f}% — 정상 범위")
         lines.append("")
@@ -533,13 +595,9 @@ def analyze_metrics(metrics, namespace):
         lines.append("")
 
         if mem["max"] >= 95:
-            findings.append(f"{severity_icon('critical')} Memory 최대 {mem['max']:.1f}% — OOM 위험")
-            recommendations.append("- **메모리 증설 필요**: 더 큰 Shape으로 업그레이드")
-            recommendations.append("- Buffer Pool 크기 점검 및 불필요한 세션 정리")
+            findings.append(f"{severity_icon('critical')} Memory 최대 {mem['max']:.1f}% — OOM 임계 구간 도달")
         elif mem["p95"] >= 80:
-            findings.append(f"{severity_icon('warning')} Memory P95 {mem['p95']:.1f}% — 메모리 압박")
-            recommendations.append("- 메모리 사용 패턴 모니터링 강화")
-            recommendations.append("- 대용량 쿼리의 `sort_buffer_size`, `join_buffer_size` 점검")
+            findings.append(f"{severity_icon('warning')} Memory P95 {mem['p95']:.1f}% — 높은 메모리 사용 관측")
         else:
             findings.append(f"{severity_icon('good')} Memory 평균 {mem['mean']:.1f}% — 정상 범위")
         lines.append("")
@@ -581,18 +639,14 @@ def analyze_metrics(metrics, namespace):
 
         total_max_iops = (read_iops["max"] if read_iops else 0) + (write_iops["max"] if write_iops else 0)
         if total_max_iops > 50000:
-            findings.append(f"{severity_icon('critical')} I/O 최대 {fmt(total_max_iops)} IOPS — 디스크 병목 가능성")
-            recommendations.append("- **스토리지 성능 업그레이드**: Higher Performance 볼륨 또는 Shape 변경")
-            recommendations.append("- 읽기 부하가 높으면 Read Replica 추가")
+            findings.append(f"{severity_icon('critical')} I/O 최대 {fmt(total_max_iops)} IOPS — 높은 디스크 I/O 관측")
         elif total_max_iops > 20000:
             findings.append(f"{severity_icon('warning')} I/O 최대 {fmt(total_max_iops)} IOPS — 피크 시 디스크 부하 높음")
-            recommendations.append("- 인덱스 최적화로 불필요한 디스크 I/O 감소")
         else:
             findings.append(f"{severity_icon('good')} I/O 최대 {fmt(total_max_iops)} IOPS — 정상 범위")
 
         if vol_util and vol_util["max"] >= 80:
-            findings.append(f"{severity_icon('warning')} Volume Utilization 최대 {vol_util['max']:.1f}% — 디스크 포화 주의")
-            recommendations.append("- 스토리지 확장 또는 오래된 데이터 아카이빙 검토")
+            findings.append(f"{severity_icon('warning')} Volume Utilization 최대 {vol_util['max']:.1f}% — 디스크 포화 구간 관측")
         lines.append("")
 
     # ---- 4. Connections ----
@@ -613,9 +667,7 @@ def analyze_metrics(metrics, namespace):
         lines.append("")
 
         if active_conn["max"] > 500:
-            findings.append(f"{severity_icon('warning')} Active Connection 최대 {active_conn['max']:.0f} — 커넥션 풀 부족 가능성")
-            recommendations.append("- 커넥션 풀링 (ProxySQL, PgBouncer) 도입 검토")
-            recommendations.append("- `max_connections` 파라미터 확인 및 조정")
+            findings.append(f"{severity_icon('warning')} Active Connection 최대 {active_conn['max']:.0f} — 높은 동시 접속 관측")
         elif active_conn["max"] > 200:
             findings.append(f"{severity_icon('info')} Active Connection 최대 {active_conn['max']:.0f} — 중간 수준")
         else:
@@ -637,13 +689,9 @@ def analyze_metrics(metrics, namespace):
             lines.append("")
 
             if latency and latency["p95"] > 100000:  # > 100ms
-                findings.append(f"{severity_icon('critical')} 쿼리 레이턴시 P95 {fmt(latency['p95'])}us — 슬로우 쿼리 다수 존재")
-                recommendations.append("- Slow Query Log 활성화 후 상위 쿼리 분석")
-                recommendations.append("- `EXPLAIN ANALYZE`로 실행계획 확인")
-                recommendations.append("- 적절한 인덱스 추가 및 쿼리 리팩터링")
+                findings.append(f"{severity_icon('critical')} 쿼리 레이턴시 P95 {fmt(latency['p95'])}us — 높은 쿼리 지연 관측")
             elif latency and latency["p95"] > 10000:  # > 10ms
-                findings.append(f"{severity_icon('warning')} 쿼리 레이턴시 P95 {fmt(latency['p95'])}us — 개선 여지 있음")
-                recommendations.append("- 쿼리 실행계획 주기적 점검 권장")
+                findings.append(f"{severity_icon('warning')} 쿼리 레이턴시 P95 {fmt(latency['p95'])}us — 중간 수준 지연")
             elif latency:
                 findings.append(f"{severity_icon('good')} 쿼리 레이턴시 P95 {fmt(latency['p95'])}us — 양호")
             lines.append("")
@@ -663,8 +711,6 @@ def analyze_metrics(metrics, namespace):
             lines.append("")
             if cache_hit["min"] < 90:
                 findings.append(f"{severity_icon('warning')} Buffer Cache Hit Ratio 최저 {cache_hit['min']:.1f}% — 캐시 미스 빈번")
-                recommendations.append("- `shared_buffers` 증가 검토")
-                recommendations.append("- 워킹셋이 메모리보다 큰 경우 Shape 업그레이드")
             else:
                 findings.append(f"{severity_icon('good')} Buffer Cache Hit Ratio 최저 {cache_hit['min']:.1f}% — 양호")
             lines.append("")
@@ -679,47 +725,52 @@ def analyze_metrics(metrics, namespace):
                 lines.append(f"| Write Latency (ms) | {write_lat['mean']:.2f} | {write_lat['max']:.2f} | {write_lat['p95']:.2f} |")
             lines.append("")
             if write_lat and write_lat["p95"] > 10:
-                findings.append(f"{severity_icon('warning')} Write Latency P95 {write_lat['p95']:.1f}ms — 쓰기 지연")
-                recommendations.append("- WAL 설정 최적화 (`wal_buffers`, `checkpoint_completion_target`)")
+                findings.append(f"{severity_icon('warning')} Write Latency P95 {write_lat['p95']:.1f}ms — 쓰기 지연 관측")
             if read_lat and read_lat["p95"] > 5:
-                findings.append(f"{severity_icon('warning')} Read Latency P95 {read_lat['p95']:.1f}ms — 읽기 지연")
-                recommendations.append("- 캐시 히트율 개선 또는 스토리지 업그레이드")
+                findings.append(f"{severity_icon('warning')} Read Latency P95 {read_lat['p95']:.1f}ms — 읽기 지연 관측")
             lines.append("")
 
         if deadlocks and deadlocks["max"] > 0:
             findings.append(f"{severity_icon('critical')} Deadlock 감지: 최대 {deadlocks['max']:.0f}회")
-            recommendations.append("- 트랜잭션 순서 재설계")
-            recommendations.append("- Lock timeout 및 deadlock 로그 분석")
 
     # ---- Replica Analysis (MySQL) ----
     if is_mysql:
-        replica_lag = get_stat(metrics, "REPLICA_ChannelLag")
-        replica_fail = get_stat(metrics, "REPLICA_ChannelFailure")
-        replica_cpu = get_stat(metrics, "REPLICA_CPUUtilization")
-        if replica_lag or replica_fail or replica_cpu:
-            lines.append("### 6. Read Replica\n")
-            lines.append(f"| Metric | Mean | Max | P95 |")
-            lines.append(f"|--------|------|-----|-----|")
-            if replica_cpu:
-                lines.append(f"| Replica CPU | {replica_cpu['mean']:.1f}% | {replica_cpu['max']:.1f}% | {replica_cpu['p95']:.1f}% |")
-            if replica_lag:
-                lines.append(f"| Channel Lag (s) | {replica_lag['mean']:.2f} | {replica_lag['max']:.2f} | {replica_lag['p95']:.2f} |")
-            if replica_fail:
-                lines.append(f"| Channel Failure | {replica_fail['mean']:.0f} | {replica_fail['max']:.0f} | - |")
-            lines.append("")
+        import re
+        replica_indices = sorted(set(
+            int(m.group(1)) for k in metrics for m in [re.match(r"REPLICA(\d+)_", k)] if m
+        ))
+        # Legacy single-replica fallback
+        if not replica_indices and any(k.startswith("REPLICA_") for k in metrics):
+            replica_indices = [0]  # sentinel for legacy prefix
 
-            if replica_fail and replica_fail["max"] > 0:
-                findings.append(f"{severity_icon('critical')} Replica 복제 실패 감지 — Channel Failure = {replica_fail['max']:.0f}")
-                recommendations.append("- **즉시 복제 상태 점검**: `SHOW REPLICA STATUS` 확인")
-                recommendations.append("- 복제 채널 재시작 또는 Replica 재생성 검토")
-            if replica_lag and replica_lag["p95"] > 10:
-                findings.append(f"{severity_icon('warning')} Replica 복제 지연 P95 {replica_lag['p95']:.1f}s — Source 대비 데이터 불일치 가능")
-                recommendations.append("- Source 쓰기 부하 분산 또는 Replica Shape 업그레이드")
-            elif replica_lag and replica_lag["max"] > 5:
-                findings.append(f"{severity_icon('warning')} Replica 복제 지연 최대 {replica_lag['max']:.1f}s")
-            elif replica_lag:
-                findings.append(f"{severity_icon('good')} Replica 복제 지연 평균 {replica_lag['mean']:.2f}s — 정상")
-            lines.append("")
+        for ridx in replica_indices:
+            prefix = f"REPLICA{ridx}_" if ridx > 0 else "REPLICA_"
+            label = f"Replica#{ridx}" if ridx > 0 else "Replica"
+
+            replica_lag = get_stat(metrics, f"{prefix}ChannelLag")
+            replica_fail = get_stat(metrics, f"{prefix}ChannelFailure")
+            replica_cpu = get_stat(metrics, f"{prefix}CPUUtilization")
+            if replica_lag or replica_fail or replica_cpu:
+                lines.append(f"### 6. Read {label}\n")
+                lines.append(f"| Metric | Mean | Max | P95 |")
+                lines.append(f"|--------|------|-----|-----|")
+                if replica_cpu:
+                    lines.append(f"| {label} CPU | {replica_cpu['mean']:.1f}% | {replica_cpu['max']:.1f}% | {replica_cpu['p95']:.1f}% |")
+                if replica_lag:
+                    lines.append(f"| Channel Lag (s) | {replica_lag['mean']:.2f} | {replica_lag['max']:.2f} | {replica_lag['p95']:.2f} |")
+                if replica_fail:
+                    lines.append(f"| Channel Failure | {replica_fail['mean']:.0f} | {replica_fail['max']:.0f} | - |")
+                lines.append("")
+
+                if replica_fail and replica_fail["max"] > 0:
+                    findings.append(f"{severity_icon('critical')} {label} 복제 실패 감지 — Channel Failure = {replica_fail['max']:.0f}")
+                if replica_lag and replica_lag["p95"] > 10:
+                    findings.append(f"{severity_icon('warning')} {label} 복제 지연 P95 {replica_lag['p95']:.1f}s")
+                elif replica_lag and replica_lag["max"] > 5:
+                    findings.append(f"{severity_icon('warning')} {label} 복제 지연 최대 {replica_lag['max']:.1f}s")
+                elif replica_lag:
+                    findings.append(f"{severity_icon('good')} {label} 복제 지연 평균 {replica_lag['mean']:.2f}s — 정상")
+                lines.append("")
 
     # ---- 7. Storage ----
     if is_mysql:
@@ -740,8 +791,7 @@ def analyze_metrics(metrics, namespace):
                 usage_pct = stor_used["mean"] / stor_alloc["mean"] * 100
                 lines.append(f"\n**Storage Usage**: {usage_pct:.1f}%\n")
                 if usage_pct > 80:
-                    findings.append(f"{severity_icon('warning')} Storage 사용률 {usage_pct:.1f}% — 디스크 공간 부족 주의")
-                    recommendations.append("- 스토리지 확장 또는 데이터 아카이빙/파티셔닝 검토")
+                    findings.append(f"{severity_icon('warning')} Storage 사용률 {usage_pct:.1f}% — 높은 스토리지 사용 관측")
         lines.append("")
 
     # ---- 8. Network ----
@@ -767,31 +817,17 @@ def analyze_metrics(metrics, namespace):
         lines.append("- No significant issues detected.")
     lines.append("")
 
-    lines.append("### Recommendations\n")
-    if recommendations:
-        seen = set()
-        for r in recommendations:
-            if r not in seen:
-                lines.append(r)
-                seen.add(r)
-    else:
-        lines.append("- Current configuration appears appropriate for the observed workload.")
-    lines.append("")
-
     # ---- Overall Assessment ----
     critical_count = sum(1 for f in findings if "[CRITICAL]" in f)
     warning_count = sum(1 for f in findings if "[WARNING]" in f)
 
     lines.append("### Overall Assessment\n")
     if critical_count > 0:
-        lines.append(f"**Status: Attention Required** — {critical_count} critical issue(s) detected.")
-        lines.append("즉각적인 조치가 필요한 병목 지점이 발견되었습니다. 위 권장사항을 우선 검토하세요.")
+        lines.append(f"**{critical_count}개 주요 관측 항목**, {warning_count}개 참고 항목이 감지되었습니다.")
     elif warning_count > 0:
-        lines.append(f"**Status: Monitor Closely** — {warning_count} warning(s) detected.")
-        lines.append("현재 운영에 문제는 없으나 피크 시간대에 성능 저하 가능성이 있습니다.")
+        lines.append(f"**{warning_count}개 참고 항목**이 감지되었습니다.")
     else:
-        lines.append("**Status: Healthy** — No significant issues found.")
-        lines.append("현재 워크로드 대비 리소스 구성이 적절합니다.")
+        lines.append("특이 사항 없이 안정적인 메트릭이 관측되었습니다.")
     lines.append("")
 
     return "\n".join(lines)
